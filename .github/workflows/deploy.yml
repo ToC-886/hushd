@@ -1,0 +1,48 @@
+name: deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - staging
+          - production
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - uses: hashicorp/setup-terraform@v3
+      - name: Install
+        run: pnpm install --frozen-lockfile=false
+      - name: Build
+        run: pnpm turbo build
+      - name: Terraform plan (staging)
+        if: github.event.inputs.environment == 'staging'
+        run: |
+          cd infra/terraform/environments/dev
+          terraform init
+          terraform plan -out=tfplan
+      - name: Terraform plan (production)
+        if: github.event.inputs.environment == 'production'
+        run: |
+          cd infra/terraform/environments/prod
+          terraform init
+          terraform plan -out=tfplan
+      - name: Terraform apply
+        if: github.event.inputs.environment == 'production'
+        run: |
+          cd infra/terraform/environments/prod
+          terraform apply -auto-approve tfplan

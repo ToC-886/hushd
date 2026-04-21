@@ -1,0 +1,43 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile=false
+      - name: Prisma validate
+        env:
+          DATABASE_URL: postgresql://u:p@localhost:5432/db
+        run: |
+          pnpm --filter @hushd/db exec prisma validate
+          pnpm --filter @hushd/db exec prisma generate
+      - name: Migration drift check
+        env:
+          DATABASE_URL: postgresql://u:p@localhost:5432/db
+        run: pnpm --filter @hushd/db exec prisma migrate diff --from-empty --to-schema-datamodel packages/db/prisma/schema.prisma --script > /tmp/migration.sql
+      - name: Build
+        run: pnpm turbo build lint
+        env:
+          DATABASE_URL: postgresql://u:p@localhost:5432/db
+      - name: Test
+        run: pnpm turbo test
+        env:
+          DATABASE_URL: postgresql://u:p@localhost:5432/db

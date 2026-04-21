@@ -1,0 +1,408 @@
+openapi: 3.1.0
+info:
+  title: hushd API
+  version: 0.3.0
+  description: Enterprise roadmap API skeleton covering auth, verification, billing, creator flows, media, messaging, and admin controls.
+servers:
+  - url: https://api.example.com/v1
+    description: Production
+  - url: http://localhost:4000/v1
+    description: Local
+tags:
+  - name: health
+  - name: auth
+  - name: verification
+  - name: billing
+  - name: creator
+  - name: feed
+  - name: media
+  - name: messages
+  - name: admin
+  - name: analytics
+  - name: risk
+  - name: webhooks
+paths:
+  /health:
+    get:
+      tags: [health]
+      summary: Liveness probe
+      operationId: healthGet
+      responses:
+        "200":
+          description: OK
+  /auth/register:
+    post:
+      tags: [auth]
+      summary: Register account
+      operationId: authRegister
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RegisterRequest"
+      responses:
+        "201":
+          description: Tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokensResponse"
+  /auth/login:
+    post:
+      tags: [auth]
+      summary: Login account
+      operationId: authLogin
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LoginRequest"
+      responses:
+        "200":
+          description: Tokens issued
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokensResponse"
+  /auth/refresh:
+    post:
+      tags: [auth]
+      summary: Rotate refresh token
+      operationId: authRefresh
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Tokens issued
+  /auth/logout:
+    post:
+      tags: [auth]
+      summary: Revoke refresh token session
+      operationId: authLogout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RefreshRequest"
+      responses:
+        "200":
+          description: Session revoked
+  /auth/me:
+    get:
+      tags: [auth]
+      security: [{ bearerAuth: [] }]
+      summary: Current user profile
+      operationId: authMe
+      responses:
+        "200":
+          description: User profile
+  /verification/status:
+    get:
+      tags: [verification]
+      security: [{ bearerAuth: [] }]
+      summary: Get age/id verification status
+      operationId: verificationStatus
+      responses:
+        "200":
+          description: Verification status
+  /verification/age/start:
+    post:
+      tags: [verification]
+      security: [{ bearerAuth: [] }]
+      summary: Start age verification session
+      operationId: verificationAgeStart
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartVerificationRequest"
+      responses:
+        "200":
+          description: Verification session
+  /verification/id/start:
+    post:
+      tags: [verification]
+      security: [{ bearerAuth: [] }]
+      summary: Start creator identity verification
+      operationId: verificationIdStart
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/StartVerificationRequest"
+      responses:
+        "200":
+          description: Verification session
+  /billing/subscriptions/checkout:
+    post:
+      tags: [billing]
+      security: [{ bearerAuth: [] }]
+      summary: Create processor checkout session
+      operationId: billingCheckout
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateSubscriptionCheckoutRequest"
+      responses:
+        "200":
+          description: Checkout session
+  /billing/subscriptions/cancel:
+    post:
+      tags: [billing]
+      security: [{ bearerAuth: [] }]
+      summary: Cancel subscription
+      operationId: billingCancelSubscription
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CancelSubscriptionRequest"
+      responses:
+        "200":
+          description: Canceled
+  /billing/history:
+    get:
+      tags: [billing]
+      security: [{ bearerAuth: [] }]
+      summary: Payment history
+      operationId: billingHistory
+      responses:
+        "200":
+          description: Transaction rows
+  /creator/tiers:
+    post:
+      tags: [creator]
+      security: [{ bearerAuth: [] }]
+      summary: Create subscription tier
+      operationId: creatorTierCreate
+      responses:
+        "201":
+          description: Tier created
+  /creator/posts:
+    post:
+      tags: [creator]
+      security: [{ bearerAuth: [] }]
+      summary: Publish creator post
+      operationId: creatorPostCreate
+      responses:
+        "201":
+          description: Post created
+  /feed/me:
+    get:
+      tags: [feed]
+      security: [{ bearerAuth: [] }]
+      summary: Fan entitlement-aware feed
+      operationId: feedMe
+      responses:
+        "200":
+          description: Feed rows
+  /media/uploads/init:
+    post:
+      tags: [media]
+      security: [{ bearerAuth: [] }]
+      summary: Create staging upload target
+      operationId: mediaUploadsInit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/InitUploadRequest"
+      responses:
+        "200":
+          description: Presigned upload target
+  /media/uploads/complete:
+    post:
+      tags: [media]
+      security: [{ bearerAuth: [] }]
+      summary: Enqueue scan and ingest
+      operationId: mediaUploadsComplete
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CompleteUploadRequest"
+      responses:
+        "200":
+          description: Job accepted
+  /messages/send:
+    post:
+      tags: [messages]
+      security: [{ bearerAuth: [] }]
+      summary: Send direct message (optional PPV)
+      operationId: messagesSend
+      responses:
+        "201":
+          description: Message created
+  /messages/{messageId}/unlock:
+    post:
+      tags: [messages]
+      security: [{ bearerAuth: [] }]
+      summary: Unlock PPV message
+      operationId: messagesUnlock
+      parameters:
+        - name: messageId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Unlocked
+  /admin/moderation/queue:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }]
+      summary: Moderation queue for admins
+      operationId: adminModerationQueue
+      responses:
+        "200":
+          description: Queue items
+  /admin/fraud/dashboard:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }]
+      summary: Fraud dashboard aggregates
+      operationId: adminFraudDashboard
+      responses:
+        "200":
+          description: Fraud summary
+  /analytics/creator/me:
+    get:
+      tags: [analytics]
+      security: [{ bearerAuth: [] }]
+      summary: Creator analytics snapshot
+      operationId: analyticsCreatorMe
+      responses:
+        "200":
+          description: Analytics summary
+  /risk/payout/{creatorId}:
+    get:
+      tags: [risk]
+      security: [{ bearerAuth: [] }]
+      summary: Payout risk scoring
+      operationId: riskPayout
+      parameters:
+        - name: creatorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Risk summary
+  /webhooks/billing/{processorId}:
+    post:
+      tags: [webhooks]
+      summary: Processor billing webhook endpoint
+      operationId: webhookBilling
+      parameters:
+        - name: processorId
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Processed
+  /webhooks/verification/{vendor}:
+    post:
+      tags: [webhooks]
+      summary: Verification vendor webhook endpoint
+      operationId: webhookVerification
+      parameters:
+        - name: vendor
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Processed
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    RegisterRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 12 }
+        role: { type: string, enum: [FAN, CREATOR] }
+    LoginRequest:
+      type: object
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string }
+    RefreshRequest:
+      type: object
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string }
+    StartVerificationRequest:
+      type: object
+      required: [returnUrl]
+      properties:
+        returnUrl: { type: string, format: uri }
+        locale: { type: string }
+    CreateSubscriptionCheckoutRequest:
+      type: object
+      required: [creatorSlug, tierId, successReturnUrl, cancelReturnUrl]
+      properties:
+        creatorSlug: { type: string }
+        tierId: { type: string, format: uuid }
+        successReturnUrl: { type: string, format: uri }
+        cancelReturnUrl: { type: string, format: uri }
+    CancelSubscriptionRequest:
+      type: object
+      required: [subscriptionId]
+      properties:
+        subscriptionId: { type: string, format: uuid }
+        reason: { type: string }
+    InitUploadRequest:
+      type: object
+      required: [ownerCreatorId, mediaType]
+      properties:
+        ownerCreatorId: { type: string, format: uuid }
+        mediaType: { type: string, enum: [IMAGE, VIDEO, AUDIO, OTHER] }
+        contentType: { type: string }
+    CompleteUploadRequest:
+      type: object
+      required: [mediaId, ownerCreatorId, stagingKey, mediaType]
+      properties:
+        mediaId: { type: string, format: uuid }
+        ownerCreatorId: { type: string, format: uuid }
+        stagingKey: { type: string }
+        mediaType: { type: string, enum: [IMAGE, VIDEO, AUDIO, OTHER] }
+        contentType: { type: string }
+        sha256: { type: string }
+    AuthTokensResponse:
+      type: object
+      required: [accessToken, refreshToken, tokenType, expiresIn, user]
+      properties:
+        accessToken: { type: string }
+        refreshToken: { type: string }
+        tokenType: { type: string, enum: [Bearer] }
+        expiresIn: { type: integer }
+        user:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string, format: email }
+            roles:
+              type: array
+              items: { type: string }
