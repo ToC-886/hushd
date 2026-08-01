@@ -15,7 +15,6 @@ jest.mock("ioredis", () => {
   };
 });
 
-// eslint-disable-next-line import/first
 import { RedisThrottlerStorage } from "./redis-throttler.storage";
 
 describe("RedisThrottlerStorage", () => {

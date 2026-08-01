@@ -39,7 +39,7 @@
 | Playwright: creator post → fan subscribe → feed media | Monetization |
 | Playwright: admin login → payout approve | Ops |
 | Worker integration with Redis testcontainer | Job retries |
-| Contract test: OpenAPI vs controllers | Drift (R-033 synced by hand; automate) |
+| ~~Contract test: OpenAPI vs controllers~~ | **Done** (R-037) — `apps/api/src/openapi/openapi-contract.spec.ts` runs in CI (`pnpm --filter @hushd/api run test:contract`); route/method/param/security/status/body drift fails the build |
 
 ## Rules
 

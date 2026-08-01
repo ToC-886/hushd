@@ -1,4 +1,4 @@
-import { Controller, Headers, Inject, Param, Post, RawBodyRequest, Req, UnauthorizedException } from "@nestjs/common";
+import { Controller, Headers, HttpCode, Inject, Param, Post, RawBodyRequest, Req, UnauthorizedException } from "@nestjs/common";
 import type { Request } from "express";
 import { Public } from "../auth/public.decorator";
 import { IDV_PROVIDER } from "../integrations/integrations.tokens";
@@ -14,6 +14,7 @@ export class VerificationWebhookController {
   ) {}
 
   @Post(":vendor")
+  @HttpCode(200)
   async handle(
     @Param("vendor") vendor: string,
     @Headers() headers: Record<string, string | string[] | undefined>,

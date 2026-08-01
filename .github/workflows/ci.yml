@@ -53,6 +53,8 @@ jobs:
         run: pnpm turbo typecheck
       - name: Build + lint
         run: pnpm turbo build lint
+      - name: OpenAPI contract guard
+        run: pnpm --filter @hushd/api run test:contract
       - name: Test
         run: pnpm turbo test
 

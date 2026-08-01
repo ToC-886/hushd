@@ -32,7 +32,7 @@ export interface CsamScanProvider {
 export class NoopCsamScanProvider implements CsamScanProvider {
   readonly id = "noop_csam";
 
-  async scanObject(_input: ScanInput): Promise<ScanVerdict> {
+  async scanObject(): Promise<ScanVerdict> {
     return { status: "clean" };
   }
 }

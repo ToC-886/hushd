@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Post, UseGuards } from "@nestjs/common";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { VerificationPolicyGuard } from "../verification/verification-policy.guard";
 import { RequireVerification } from "../verification/verification.decorator";
@@ -11,6 +11,7 @@ export class BillingController {
   constructor(private readonly billing: BillingService) {}
 
   @Post("subscriptions/checkout")
+  @HttpCode(200)
   @UseGuards(VerificationPolicyGuard)
   @RequireVerification("age")
   createCheckout(@CurrentUser() user: RequestUser, @Body() dto: CreateSubscriptionDto) {
@@ -18,6 +19,7 @@ export class BillingController {
   }
 
   @Post("subscriptions/cancel")
+  @HttpCode(200)
   @UseGuards(VerificationPolicyGuard)
   @RequireVerification("age")
   cancelSubscription(@CurrentUser() user: RequestUser, @Body() dto: CancelSubscriptionDto) {

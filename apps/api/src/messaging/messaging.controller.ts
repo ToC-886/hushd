@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { VerificationPolicyGuard } from "../verification/verification-policy.guard";
 import { RequireVerification } from "../verification/verification.decorator";
@@ -18,6 +18,7 @@ export class MessagingController {
   }
 
   @Post(":messageId/unlock")
+  @HttpCode(200)
   unlock(@CurrentUser() user: RequestUser, @Param("messageId") messageId: string) {
     return this.messaging.unlockPpv(user, messageId);
   }

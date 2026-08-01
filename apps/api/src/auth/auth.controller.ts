@@ -40,6 +40,7 @@ export class AuthController {
 
   @Public()
   @Post("login")
+  @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async login(
     @Body() dto: LoginDto,
@@ -54,6 +55,7 @@ export class AuthController {
 
   @Public()
   @Post("refresh")
+  @HttpCode(200)
   @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async refresh(
     @Body() dto: RefreshDto,
@@ -94,6 +96,7 @@ export class AuthController {
 
   @Public()
   @Post("verify-email")
+  @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   async verifyEmail(
     @Body() dto: VerifyEmailDto,
@@ -108,6 +111,7 @@ export class AuthController {
 
   @Public()
   @Post("verify-email/resend")
+  @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   resendVerification(@Body() dto: EmailAddressDto) {
     return this.auth.resendVerification(dto.email);
@@ -115,6 +119,7 @@ export class AuthController {
 
   @Public()
   @Post("password-reset/request")
+  @HttpCode(200)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   requestPasswordReset(@Body() dto: EmailAddressDto) {
     return this.auth.requestPasswordReset(dto.email);
@@ -122,6 +127,7 @@ export class AuthController {
 
   @Public()
   @Post("password-reset/confirm")
+  @HttpCode(200)
   @Throttle({ default: { limit: 10, ttl: 60_000 } })
   confirmPasswordReset(@Body() dto: PasswordResetConfirmDto) {
     return this.auth.confirmPasswordReset(dto.token, dto.password);
@@ -133,11 +139,13 @@ export class AuthController {
   }
 
   @Post("totp/setup")
+  @HttpCode(200)
   setupTotp(@CurrentUser() user: RequestUser) {
     return this.auth.setupTotp(user);
   }
 
   @Post("totp/enable")
+  @HttpCode(200)
   enableTotp(@CurrentUser() user: RequestUser, @Body() dto: TotpEnableDto) {
     return this.auth.enableTotp(user, dto.code);
   }

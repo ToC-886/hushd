@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { Body, Controller, Get, HttpCode, Param, Post, Query } from "@nestjs/common";
 import { UserRole, type ModerationQueueStatus } from "@prisma/client";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { RequireRole } from "../auth/role.decorator";
@@ -32,6 +32,7 @@ export class ModerationController {
   }
 
   @Post("reports/:reportId/triage")
+  @HttpCode(200)
   @RequireRole(UserRole.ADMIN)
   triage(
     @CurrentUser() user: RequestUser,

@@ -1,4 +1,4 @@
-import { BadRequestException, Body, Controller, Delete, Get, Param, Post, Query } from "@nestjs/common";
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, Param, Post, Query } from "@nestjs/common";
 import { GeoBlockScope, UserRole, type DMCAStatus, type PayoutStatus } from "@prisma/client";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { RequireRole } from "../auth/role.decorator";
@@ -17,6 +17,7 @@ export class AdminController {
   }
 
   @Post("moderation/queue/:id/resolve")
+  @HttpCode(200)
   resolveModeration(@Param("id") id: string, @CurrentUser() user: RequestUser) {
     return this.admin.resolveModeration(id, user.id);
   }
@@ -27,11 +28,13 @@ export class AdminController {
   }
 
   @Post("payouts/:payoutId/approve")
+  @HttpCode(200)
   approvePayout(@Param("payoutId") payoutId: string, @CurrentUser() user: RequestUser) {
     return this.admin.approvePayout(payoutId, user.id);
   }
 
   @Post("payouts/:payoutId/paid")
+  @HttpCode(200)
   markPaid(
     @Param("payoutId") payoutId: string,
     @CurrentUser() user: RequestUser,
@@ -41,6 +44,7 @@ export class AdminController {
   }
 
   @Post("payouts/:payoutId/cancel")
+  @HttpCode(200)
   cancelPayout(
     @Param("payoutId") payoutId: string,
     @CurrentUser() user: RequestUser,
@@ -55,6 +59,7 @@ export class AdminController {
   }
 
   @Post("risk/holds/:holdId/release")
+  @HttpCode(200)
   releaseHold(@Param("holdId") holdId: string, @CurrentUser() user: RequestUser) {
     return this.admin.releaseHold(holdId, user.id);
   }
@@ -98,6 +103,7 @@ export class AdminController {
   }
 
   @Post("dmca/:id/status")
+  @HttpCode(200)
   updateDmca(
     @Param("id") id: string,
     @CurrentUser() user: RequestUser,

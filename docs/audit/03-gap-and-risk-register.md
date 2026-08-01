@@ -9,7 +9,7 @@
 | G-005 | Auth UX | JWT access+refresh in localStorage | was `apps/web/lib/api.ts`, admin same | XSS exfiltration of sessions | Was high | — | **Fixed** — HttpOnly Secure SameSite cookies + CSRF header; FE `credentials:include` | — | Closed (R-032) |
 | G-006 | Geo | ACCESS geo needs edge shared secret | ADR-0002, geo-block guard | Spoofable headers otherwise | High without secret | High | Deploy edge signing secret | CDN/edge config | Open — ops |
 | G-007 | Media | Watermark job not implemented | shared job type; worker ignores | Weaker forensic trail | Medium | Medium | Implement or formally defer | FFmpeg/worker capacity | Open |
-| G-008 | Docs | OpenAPI drifted | `docs/openapi.yaml` | Integrator confusion | Was high | — | **Fixed** — full re-sync to implemented controllers + DTOs | — | Closed (R-033) |
+| G-008 | Docs | OpenAPI drifted | `docs/openapi.yaml` | Integrator confusion | Was high | — | **Fixed** — full re-sync to implemented controllers + DTOs; **drift now prevented by automated contract guard** (`apps/api/src/openapi/`, CI step `OpenAPI contract guard`) | — | Closed (R-033, automated by R-037) |
 | G-009 | Infra | Terraform skeleton | `infra/terraform` | No turnkey cloud deploy | Certain | High | Complete modules or document alternative | Cloud choice | Open |
 | G-010 | Test | No web/admin/e2e tests | was package scripts echo | Regressions in UI | Medium | Medium | **Scaffolded** — Playwright `@hushd/e2e` (API auth/health + web smoke) | CI time | Mitigated (R-034) — expand journeys |
 | G-011 | Product | Promotions/affiliates missing | roadmap P3 | Revenue features incomplete | N/A | Enhancement | Future phase | Product | Deferred |

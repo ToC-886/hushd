@@ -34,6 +34,8 @@ All notable changes for the production-hardening audit are summarized here. Deta
 - Audit artifacts `docs/audit/01–07`, PHASE/PRODUCTION/SECURITY/DEPLOYMENT/OPS/ARCHITECTURE docs
 - OpenAPI re-synced to implemented routes + `cookieAuth` scheme (R-033)
 - Playwright `@hushd/e2e` scaffold: API health + cookie session lifecycle, web register/login smoke (R-034)
+- **OpenAPI contract guard**: automated controller↔spec drift test (route/method/path-param/security/request-body/success-status) with negative fixtures, wired into CI; 41 pre-existing drift items fixed (28 `@HttpCode(200)` pins, 3 missing `security` declarations, 3 missing `requestBody` definitions) (R-037)
+- Remediation-log table repaired: R-019/R-020 malformed leading cells (R-036); markdown lint audit decision recorded — no lint gate configured, no genuine defects beyond the two rows (R-035)
 
 ### Known incomplete
 

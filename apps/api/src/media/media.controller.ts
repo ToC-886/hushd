@@ -1,4 +1,4 @@
-import { Body, Controller, ForbiddenException, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, ForbiddenException, Get, HttpCode, Param, Post, UseGuards } from "@nestjs/common";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { VerificationPolicyGuard } from "../verification/verification-policy.guard";
 import { RequireVerification } from "../verification/verification.decorator";
@@ -10,6 +10,7 @@ export class MediaController {
   constructor(private readonly media: MediaService) {}
 
   @Post("uploads/init")
+  @HttpCode(200)
   @UseGuards(VerificationPolicyGuard)
   @RequireVerification("creator")
   init(@CurrentUser() user: RequestUser, @Body() body: InitUploadDto) {
@@ -32,6 +33,7 @@ export class MediaController {
   }
 
   @Post("uploads/complete")
+  @HttpCode(200)
   @UseGuards(VerificationPolicyGuard)
   @RequireVerification("creator")
   complete(

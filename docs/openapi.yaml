@@ -520,7 +520,8 @@ paths:
   /feed/creator/{slug}:
     get:
       tags: [feed]
-      summary: Public creator post listing (entitlement-filtered when authenticated)
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Creator post listing (entitlement-filtered; requires age verification)
       operationId: feedCreatorPosts
       parameters:
         - name: slug
@@ -533,7 +534,8 @@ paths:
   /feed/creator/{slug}/profile:
     get:
       tags: [feed]
-      summary: Public creator profile with tiers
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Creator profile with tiers (requires age verification)
       operationId: feedCreatorProfile
       parameters:
         - name: slug
@@ -737,7 +739,8 @@ paths:
   /moderation/dmca:
     post:
       tags: [moderation]
-      summary: File a DMCA takedown notice (public intake)
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: File a DMCA takedown notice (authenticated intake)
       operationId: moderationDmcaCreate
       requestBody:
         required: true
@@ -768,6 +771,15 @@ paths:
           in: path
           required: true
           schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [status]
+              properties:
+                status: { type: string, enum: [TRIAGED, RESOLVED, DISMISSED] }
       responses:
         "200":
           description: Triaged
@@ -822,6 +834,14 @@ paths:
       operationId: adminPayoutPaid
       parameters:
         - $ref: "#/components/parameters/payoutId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                processorRef: { type: string }
       responses:
         "200":
           description: Marked paid
@@ -833,6 +853,14 @@ paths:
       operationId: adminPayoutCancel
       parameters:
         - $ref: "#/components/parameters/payoutId"
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                reason: { type: string }
       responses:
         "200":
           description: Canceled
