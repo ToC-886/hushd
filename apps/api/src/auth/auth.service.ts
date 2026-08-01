@@ -7,14 +7,15 @@ import {
 } from "@nestjs/common";
 import { ConfigService } from "@nestjs/config";
 import { JwtService } from "@nestjs/jwt";
-import { UserRole, UserStatus, type User } from "@prisma/client";
+import { EmailTokenPurpose, UserRole, UserStatus, type User } from "@prisma/client";
 import * as bcrypt from "bcryptjs";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { authenticator } from "otplib";
 import type { RequestUser } from "./current-user.decorator";
 import type { LoginDto } from "./dto/login.dto";
 import type { RegisterDto } from "./dto/register.dto";
 import { sealSecret, openSecret } from "./secret-crypto";
+import { MailerService } from "../mailer/mailer.service";
 import { PrismaService } from "../prisma/prisma.service";
 
 type RefreshPayload = {
@@ -25,12 +26,26 @@ type RefreshPayload = {
 
 type IssueMeta = { userAgent?: string; ip?: string };
 
+type AuthTokens = {
+  accessToken: string;
+  refreshToken: string;
+  tokenType: "Bearer";
+  expiresIn: number;
+  user: { id: string; email: string; roles: UserRole[] };
+};
+
+export type RegisterResult = AuthTokens | { pendingVerification: true; user: { id: string; email: string } };
+
+const VERIFY_EMAIL_TTL_MS = 24 * 60 * 60 * 1000;
+const PASSWORD_RESET_TTL_MS = 60 * 60 * 1000;
+
 @Injectable()
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
+    private readonly mailer: MailerService,
   ) {}
 
   private get refreshSecret(): string {
@@ -45,11 +60,20 @@ export class AuthService {
     return this.config.getOrThrow<string>("ENCRYPTION_KEY");
   }
 
+  /**
+   * Dev/test bypass: with AUTH_AUTO_ACTIVATE=true (the default outside
+   * production) accounts activate immediately without email verification.
+   * Startup config validation refuses this combination in production.
+   */
   private autoActivate(): boolean {
     return this.config.get<string>("AUTH_AUTO_ACTIVATE") !== "false";
   }
 
-  async register(dto: RegisterDto) {
+  private webUrl(): string {
+    return (this.config.get<string>("APP_WEB_URL") ?? "http://localhost:3000").replace(/\/+$/, "");
+  }
+
+  async register(dto: RegisterDto): Promise<RegisterResult> {
     const email = dto.email.trim().toLowerCase();
     const existing = await this.prisma.user.findUnique({ where: { email } });
     if (existing) {
@@ -63,7 +87,8 @@ export class AuthService {
 
     const roles: UserRole[] = requested === UserRole.CREATOR ? [UserRole.CREATOR, UserRole.FAN] : [UserRole.FAN];
     const passwordHash = await bcrypt.hash(dto.password, 12);
-    const status = this.autoActivate() ? UserStatus.ACTIVE : UserStatus.PENDING;
+    const autoActivate = this.autoActivate();
+    const status = autoActivate ? UserStatus.ACTIVE : UserStatus.PENDING;
 
     const baseSlug = this.slugify(email);
     const slug = await this.uniqueSlug(baseSlug);
@@ -75,6 +100,9 @@ export class AuthService {
         passwordHash,
         roles,
         status,
+        // The dev bypass counts as verified; production activation sets this
+        // only after the email token round-trips.
+        emailVerifiedAt: autoActivate ? new Date() : null,
         fanProfile: { create: {} },
         ...(requested === UserRole.CREATOR
           ? {
@@ -89,10 +117,18 @@ export class AuthService {
       },
     });
 
-    return this.issueTokens(user, {});
+    if (autoActivate) {
+      return this.issueTokens(user, {});
+    }
+
+    // Pending accounts get no tokens — a session for an unverified account
+    // would be indistinguishable from a verified one at the JWT layer.
+    const token = await this.createEmailToken(user.id, EmailTokenPurpose.VERIFY_EMAIL, VERIFY_EMAIL_TTL_MS);
+    await this.mailer.sendVerificationEmail(email, `${this.webUrl()}/verify-email?token=${token}`);
+    return { pendingVerification: true, user: { id: user.id, email: user.email } };
   }
 
-  async login(dto: LoginDto, meta: IssueMeta) {
+  async login(dto: LoginDto, meta: IssueMeta): Promise<AuthTokens> {
     const email = dto.email.trim().toLowerCase();
     const user = await this.prisma.user.findUnique({ where: { email } });
     if (!user?.passwordHash) {
@@ -102,10 +138,64 @@ export class AuthService {
     if (!ok) {
       throw new UnauthorizedException("invalid_credentials");
     }
+    // Second factor is verified before any account-status disclosure.
+    await this.assertTotpIfEnabled(user.id, dto.totpCode);
     if (user.status !== UserStatus.ACTIVE) {
+      if (user.status === UserStatus.PENDING && !user.emailVerifiedAt) {
+        throw new ForbiddenException("email_not_verified");
+      }
       throw new ForbiddenException("account_not_active");
     }
     return this.issueTokens(user, meta);
+  }
+
+  async verifyEmail(rawToken: string, meta: IssueMeta): Promise<AuthTokens> {
+    const token = await this.consumeEmailToken(rawToken, EmailTokenPurpose.VERIFY_EMAIL);
+    // PENDING accounts activate on verification; other statuses untouched.
+    const user = await this.prisma.user.update({
+      where: { id: token.userId },
+      data: {
+        emailVerifiedAt: new Date(),
+        status: UserStatus.ACTIVE,
+      },
+    });
+    return this.issueTokens(user, meta);
+  }
+
+  /** Always succeeds — the response must not reveal whether the email exists. */
+  async resendVerification(emailRaw: string): Promise<{ ok: true }> {
+    const email = emailRaw.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user || user.emailVerifiedAt) {
+      return { ok: true };
+    }
+    const token = await this.createEmailToken(user.id, EmailTokenPurpose.VERIFY_EMAIL, VERIFY_EMAIL_TTL_MS);
+    await this.mailer.sendVerificationEmail(email, `${this.webUrl()}/verify-email?token=${token}`);
+    return { ok: true };
+  }
+
+  /** Always succeeds — the response must not reveal whether the email exists. */
+  async requestPasswordReset(emailRaw: string): Promise<{ ok: true }> {
+    const email = emailRaw.trim().toLowerCase();
+    const user = await this.prisma.user.findUnique({ where: { email } });
+    if (!user?.passwordHash) {
+      return { ok: true };
+    }
+    const token = await this.createEmailToken(user.id, EmailTokenPurpose.PASSWORD_RESET, PASSWORD_RESET_TTL_MS);
+    await this.mailer.sendPasswordResetEmail(email, `${this.webUrl()}/reset-password?token=${token}`);
+    return { ok: true };
+  }
+
+  async confirmPasswordReset(rawToken: string, newPassword: string): Promise<{ ok: true }> {
+    const token = await this.consumeEmailToken(rawToken, EmailTokenPurpose.PASSWORD_RESET);
+    const passwordHash = await bcrypt.hash(newPassword, 12);
+    await this.prisma.user.update({
+      where: { id: token.userId },
+      data: { passwordHash },
+    });
+    // A reset proves mailbox access, not session legitimacy — kill everything.
+    await this.revokeAllSessionsForUser(token.userId);
+    return { ok: true };
   }
 
   async refresh(refreshToken: string, meta: IssueMeta) {
@@ -166,6 +256,7 @@ export class AuthService {
         email: true,
         roles: true,
         status: true,
+        emailVerifiedAt: true,
         createdAt: true,
         totpSecret: { select: { enabledAt: true } },
         creatorProfile: { select: { slug: true } },
@@ -179,6 +270,7 @@ export class AuthService {
       email: row.email,
       roles: row.roles,
       status: row.status,
+      emailVerified: Boolean(row.emailVerifiedAt),
       createdAt: row.createdAt,
       creatorSlug: row.creatorProfile?.slug ?? null,
       totpEnabled: Boolean(row.totpSecret?.enabledAt),
@@ -221,6 +313,67 @@ export class AuthService {
       data: { enabledAt: new Date() },
     });
     return { ok: true as const };
+  }
+
+  /**
+   * Enforces the second factor at login. A missing code and a wrong code get
+   * distinct errors so the client can render the code prompt; both are 401
+   * and neither reveals whether TOTP is configured to anyone without the
+   * password.
+   */
+  private async assertTotpIfEnabled(userId: string, totpCode?: string) {
+    const row = await this.prisma.totpSecret.findUnique({ where: { userId } });
+    if (!row?.enabledAt) return;
+    if (!totpCode) {
+      throw new UnauthorizedException("totp_required");
+    }
+    const secret = openSecret(row.secretEnc, this.encryptionKey);
+    const ok = authenticator.verify({ token: totpCode, secret });
+    if (!ok) {
+      throw new UnauthorizedException("invalid_totp");
+    }
+  }
+
+  /**
+   * Issues a single-use email token. Only the SHA-256 hash is stored; any
+   * previous unconsumed tokens for the same purpose are invalidated so only
+   * the latest link works.
+   */
+  private async createEmailToken(userId: string, purpose: EmailTokenPurpose, ttlMs: number): Promise<string> {
+    const raw = randomBytes(32).toString("hex");
+    const tokenHash = createHash("sha256").update(raw).digest("hex");
+    await this.prisma.$transaction([
+      this.prisma.emailToken.updateMany({
+        where: { userId, purpose, consumedAt: null },
+        data: { consumedAt: new Date() },
+      }),
+      this.prisma.emailToken.create({
+        data: { userId, purpose, tokenHash, expiresAt: new Date(Date.now() + ttlMs) },
+      }),
+    ]);
+    return raw;
+  }
+
+  /**
+   * Atomically marks a token consumed so concurrent uses of the same link
+   * resolve exactly once (the update matches only unconsumed rows).
+   */
+  private async consumeEmailToken(rawToken: string, purpose: EmailTokenPurpose) {
+    const tokenHash = createHash("sha256").update(rawToken).digest("hex");
+    const token = await this.prisma.emailToken.findFirst({
+      where: { tokenHash, purpose, consumedAt: null },
+    });
+    if (!token || token.expiresAt <= new Date()) {
+      throw new BadRequestException("invalid_or_expired_token");
+    }
+    const consumed = await this.prisma.emailToken.updateMany({
+      where: { id: token.id, consumedAt: null },
+      data: { consumedAt: new Date() },
+    });
+    if (consumed.count !== 1) {
+      throw new BadRequestException("invalid_or_expired_token");
+    }
+    return token;
   }
 
   private async issueTokens(user: User, meta: IssueMeta) {

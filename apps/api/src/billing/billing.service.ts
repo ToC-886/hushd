@@ -114,4 +114,16 @@ export class BillingService {
       occurredAt: row.occurredAt,
     }));
   }
+
+  mySubscriptions(user: RequestUser) {
+    return this.prisma.subscription.findMany({
+      where: { fanUserId: user.id },
+      orderBy: { createdAt: "desc" },
+      take: 100,
+      include: {
+        creator: { select: { slug: true, displayName: true } },
+        tier: { select: { id: true, title: true, priceCents: true, interval: true } },
+      },
+    });
+  }
 }

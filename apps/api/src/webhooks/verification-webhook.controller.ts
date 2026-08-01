@@ -1,4 +1,5 @@
-import { Body, Controller, Headers, Inject, Param, Post, UnauthorizedException } from "@nestjs/common";
+import { Controller, Headers, Inject, Param, Post, RawBodyRequest, Req, UnauthorizedException } from "@nestjs/common";
+import type { Request } from "express";
 import { Public } from "../auth/public.decorator";
 import { IDV_PROVIDER } from "../integrations/integrations.tokens";
 import type { IdVerificationProvider } from "@hushd/shared";
@@ -16,9 +17,12 @@ export class VerificationWebhookController {
   async handle(
     @Param("vendor") vendor: string,
     @Headers() headers: Record<string, string | string[] | undefined>,
-    @Body() body: unknown,
+    @Req() req: RawBodyRequest<Request>,
   ) {
-    const rawBody = typeof body === "string" ? body : JSON.stringify(body ?? {});
+    if (vendor !== this.idv.vendor) {
+      throw new UnauthorizedException("unknown_vendor");
+    }
+    const rawBody = req.rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}), "utf8");
     const ok = await this.idv.verifyWebhook({ rawBody, headers });
     if (!ok) {
       throw new UnauthorizedException("invalid_signature");

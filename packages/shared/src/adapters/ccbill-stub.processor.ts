@@ -4,12 +4,13 @@ import type {
   NormalizedBillingEvent,
   PaymentProcessor,
   WebhookVerificationContext,
-} from "@hushd/shared";
-import { verifyHmacSha256Hex } from "@hushd/shared";
+} from "./payment-processor";
+import { verifyHmacSha256Hex } from "../webhooks/signature";
 
 /**
  * Development-safe CCBill adapter stub.
- * Keep interface parity with real provider implementation.
+ * Keep interface parity with the real provider implementation (FlexForms
+ * checkout + webhook postbacks) so cutover is config-only.
  */
 export class CcbillStubProcessor implements PaymentProcessor {
   readonly id = "ccbill_stub";
@@ -41,10 +42,21 @@ export class CcbillStubProcessor implements PaymentProcessor {
         eventId?: string;
         txn?: string;
         amount?: number;
+        currency?: string;
         eventType?: NormalizedBillingEvent["type"];
         subscriptionId?: string;
+        fanUserId?: string;
+        creatorId?: string;
+        sessionRef?: string;
+        subscriptionRef?: string;
+        originalProcessorTxnId?: string;
+        occurredAt?: string;
       };
       if (!parsed.txn) return [];
+      const metadata: Record<string, string> = {};
+      if (parsed.sessionRef) metadata.sessionRef = parsed.sessionRef;
+      if (parsed.subscriptionRef) metadata.subscriptionRef = parsed.subscriptionRef;
+      if (parsed.originalProcessorTxnId) metadata.originalProcessorTxnId = parsed.originalProcessorTxnId;
       return [
         {
           processor: this.id,
@@ -52,10 +64,12 @@ export class CcbillStubProcessor implements PaymentProcessor {
           processorTxnId: parsed.txn,
           type: parsed.eventType ?? "subscription_charge",
           grossCents: Number(parsed.amount ?? 0),
-          currency: "EUR",
+          currency: parsed.currency ?? "EUR",
+          fanUserId: parsed.fanUserId,
+          creatorId: parsed.creatorId,
           subscriptionId: parsed.subscriptionId,
-          occurredAt: new Date().toISOString(),
-          metadata: {},
+          occurredAt: parsed.occurredAt ?? new Date().toISOString(),
+          metadata,
         },
       ];
     } catch {
@@ -63,11 +77,11 @@ export class CcbillStubProcessor implements PaymentProcessor {
     }
   }
 
-  async cancelSubscription(_processorSubscriptionRef: string): Promise<{ ok: true }> {
+  async cancelSubscription(): Promise<{ ok: true }> {
     return { ok: true };
   }
 
-  async fetchBillingHistory(_sinceIso: string) {
+  async fetchBillingHistory() {
     return [];
   }
 }

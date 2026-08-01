@@ -64,6 +64,19 @@ enum PayoutStatus {
   CANCELED
 }
 
+enum PayoutMethod {
+  SEPA
+  ACH
+  WIRE
+  OTHER
+}
+
+enum HoldReason {
+  RISK
+  ADMIN
+  COMPLIANCE
+}
+
 enum SubscriptionInterval {
   MONTH
   YEAR
@@ -90,6 +103,7 @@ enum TransactionType {
   REFUND
   CHARGEBACK
   ADJUSTMENT
+  PAYOUT
 }
 
 enum TransactionStatus {
@@ -168,13 +182,21 @@ enum ComplianceEventType {
   AGE_VERIFICATION_STARTED
   AGE_VERIFICATION_APPROVED
   AGE_VERIFICATION_REJECTED
+  AGE_VERIFICATION_EXPIRED
   ID_VERIFICATION_STARTED
   ID_VERIFICATION_APPROVED
   ID_VERIFICATION_REJECTED
+  ID_VERIFICATION_EXPIRED
   TAX_FORM_SUBMITTED
   TAX_FORM_APPROVED
   TAX_FORM_REJECTED
   JURISDICTION_BLOCKED
+  BILLING_RECONCILIATION_DISCREPANCY
+  PAYOUT_REQUESTED
+  PAYOUT_APPROVED
+  PAYOUT_PAID
+  ID2257_RECORD_SUBMITTED
+  GEO_BLOCK_UPDATED
 }
 
 // -----------------------------------------------------------------------------
@@ -182,17 +204,19 @@ enum ComplianceEventType {
 // -----------------------------------------------------------------------------
 
 model User {
-  id           String     @id @default(uuid())
-  email        String     @unique
-  passwordHash String?    @map("password_hash")
-  roles        UserRole[] @default([])
-  status       UserStatus @default(PENDING)
-  createdAt    DateTime   @default(now()) @map("created_at")
-  updatedAt    DateTime   @updatedAt @map("updated_at")
+  id              String     @id @default(uuid())
+  email           String     @unique
+  passwordHash    String?    @map("password_hash")
+  roles           UserRole[] @default([])
+  status          UserStatus @default(PENDING)
+  emailVerifiedAt DateTime?  @map("email_verified_at")
+  createdAt       DateTime   @default(now()) @map("created_at")
+  updatedAt       DateTime   @updatedAt @map("updated_at")
 
   sessions        Session[]
   oauthAccounts   OAuthAccount[]
   totpSecret      TotpSecret?
+  emailTokens     EmailToken[]
   fanProfile      FanProfile?
   creatorProfile  CreatorProfile?
   ageVerification AgeVerification[]
@@ -248,6 +272,29 @@ model TotpSecret {
   @@map("totp_secrets")
 }
 
+enum EmailTokenPurpose {
+  VERIFY_EMAIL
+  PASSWORD_RESET
+}
+
+// Single-use, hashed email tokens (verification links, password resets).
+// Only the SHA-256 hash is stored; the raw token exists only in the email.
+model EmailToken {
+  id         String            @id @default(uuid())
+  userId     String            @map("user_id")
+  purpose    EmailTokenPurpose
+  tokenHash  String            @map("token_hash")
+  expiresAt  DateTime          @map("expires_at")
+  consumedAt DateTime?         @map("consumed_at")
+  createdAt  DateTime          @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, purpose])
+  @@index([tokenHash])
+  @@map("email_tokens")
+}
+
 model OAuthAccount {
   id             String   @id @default(uuid())
   userId         String   @map("user_id")
@@ -284,6 +331,7 @@ model CreatorProfile {
   slug           String   @unique
   displayName    String?  @map("display_name")
   bio            String?
+  countryCode    String?  @map("country_code")
   payoutStatus   String   @default("NOT_READY") @map("payout_status")
   kycStatus      String   @default("NOT_STARTED") @map("kyc_status")
   referralCode   String   @unique @map("referral_code")
@@ -301,6 +349,9 @@ model CreatorProfile {
   tipsReceived  Tip[]              @relation("TipToCreator")
   transactions  Transaction[]      @relation("TxnPayeeCreator")
   payouts       Payout[]
+  payoutAccounts PayoutAccount[]
+  ledgerHolds   LedgerHold[]
+  id2257Record  Id2257Record?
   promotions    Promotion[]
   conversations Conversation[]     @relation("ConversationCreator")
   follows       Follow[]
@@ -513,6 +564,7 @@ model Transaction {
   tips     Tip[]
   ppvMsg   PpvMessage?
   ledgerEntries LedgerEntry[]
+  payouts  Payout[]
 
   @@unique([processor, processorTxnId])
   @@index([payerUserId, occurredAt])
@@ -558,6 +610,8 @@ model LedgerEntry {
 model Payout {
   id                  String       @id @default(uuid())
   creatorId           String       @map("creator_id")
+  payoutAccountId     String?      @map("payout_account_id")
+  transactionId       String?      @map("transaction_id")
   amountCents         Int          @map("amount_cents")
   currency            String       @default("EUR")
   status              PayoutStatus @default(REQUESTED)
@@ -569,10 +623,64 @@ model Payout {
   failureReason       String?      @map("failure_reason")
 
   creator         CreatorProfile @relation(fields: [creatorId], references: [userId], onDelete: Cascade)
+  payoutAccount   PayoutAccount? @relation(fields: [payoutAccountId], references: [id], onDelete: SetNull)
+  transaction     Transaction?   @relation(fields: [transactionId], references: [id], onDelete: SetNull)
   approvedByAdmin User?          @relation("PayoutApprover", fields: [approvedByAdminId], references: [id], onDelete: SetNull)
 
   @@index([creatorId, status])
   @@map("payouts")
+}
+
+model PayoutAccount {
+  id            String       @id @default(uuid())
+  creatorId     String       @map("creator_id")
+  label         String?
+  method        PayoutMethod
+  detailsSealed String       @map("details_sealed")
+  last4         String?      @map("last4")
+  currency      String       @default("EUR")
+  disabledAt    DateTime?    @map("disabled_at")
+  createdAt     DateTime     @default(now()) @map("created_at")
+  updatedAt     DateTime     @updatedAt @map("updated_at")
+
+  creator CreatorProfile @relation(fields: [creatorId], references: [userId], onDelete: Cascade)
+  payouts Payout[]
+
+  @@index([creatorId])
+  @@map("payout_accounts")
+}
+
+model LedgerHold {
+  id               String     @id @default(uuid())
+  creatorId        String     @map("creator_id")
+  reason           HoldReason
+  note             String?
+  active           Boolean    @default(true)
+  createdByAdminId String?    @map("created_by_admin_id")
+  createdAt        DateTime   @default(now()) @map("created_at")
+  releasedAt       DateTime?  @map("released_at")
+
+  creator CreatorProfile @relation(fields: [creatorId], references: [userId], onDelete: Cascade)
+
+  @@index([creatorId, active])
+  @@map("ledger_holds")
+}
+
+// 18 U.S.C. §2257 records — PII sealed at rest (AES-256-GCM), never stored raw.
+model Id2257Record {
+  id                String   @id @default(uuid())
+  creatorId         String   @unique @map("creator_id")
+  legalNameSealed   String   @map("legal_name_sealed")
+  dateOfBirth       DateTime @map("date_of_birth")
+  documentType      String   @map("document_type")
+  documentRefSealed String   @map("document_ref_sealed")
+  issuedBy          String?  @map("issued_by")
+  submittedAt       DateTime @default(now()) @map("submitted_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  creator CreatorProfile @relation(fields: [creatorId], references: [userId], onDelete: Cascade)
+
+  @@map("id_2257_records")
 }
 
 // -----------------------------------------------------------------------------
@@ -824,6 +932,24 @@ model ContentReport {
   @@index([status, createdAt])
   @@index([targetType, targetId])
   @@map("content_reports")
+}
+
+enum GeoBlockScope {
+  ACCESS
+  PAYOUTS
+}
+
+model GeoBlock {
+  id          String        @id @default(uuid())
+  countryCode String        @map("country_code")
+  scope       GeoBlockScope @default(ACCESS)
+  reason      String?
+  active      Boolean       @default(true)
+  createdAt   DateTime      @default(now()) @map("created_at")
+
+  @@unique([countryCode, scope])
+  @@index([scope, active])
+  @@map("geo_blocks")
 }
 
 model DMCARequest {

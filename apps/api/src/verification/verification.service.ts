@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from "@nestjs/common";
-import { ComplianceEventType, VerificationStatus } from "@prisma/client";
+import { ConfigService } from "@nestjs/config";
+import { ComplianceEventType, VerificationStatus, VerificationVendor } from "@prisma/client";
 import type { RequestUser } from "../auth/current-user.decorator";
 import { IDV_PROVIDER } from "../integrations/integrations.tokens";
 import type { IdVerificationProvider } from "@hushd/shared";
@@ -8,13 +9,40 @@ import { PrismaService } from "../prisma/prisma.service";
 import { ComplianceService } from "../compliance/compliance.service";
 import type { StartVerificationDto } from "./dto/start-verification.dto";
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DEFAULT_ID_TTL_DAYS = 1825; // government IDs are typically valid ~5 years
+const DEFAULT_AGE_TTL_DAYS = 0; // 0 = age attestation never expires
+
 @Injectable()
 export class VerificationService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly compliance: ComplianceService,
+    private readonly config: ConfigService,
     @Inject(IDV_PROVIDER) private readonly idv: IdVerificationProvider,
   ) {}
+
+  private vendorEnum(): VerificationVendor {
+    switch (this.idv.vendor) {
+      case "veriff":
+        return VerificationVendor.VERIFF;
+      case "jumio":
+        return VerificationVendor.JUMIO;
+      case "onfido":
+        return VerificationVendor.ONFIDO;
+      default:
+        return VerificationVendor.OTHER;
+    }
+  }
+
+  private expiryFor(kind: "age" | "id"): Date | null {
+    const envKey = kind === "age" ? "IDV_AGE_TTL_DAYS" : "IDV_ID_TTL_DAYS";
+    const fallback = kind === "age" ? DEFAULT_AGE_TTL_DAYS : DEFAULT_ID_TTL_DAYS;
+    const raw = this.config.get<string>(envKey);
+    const days = raw !== undefined && raw !== "" ? Number(raw) : fallback;
+    if (!Number.isFinite(days) || days <= 0) return null;
+    return new Date(Date.now() + days * DAY_MS);
+  }
 
   async startAgeVerification(user: RequestUser, dto: StartVerificationDto) {
     const result = await this.idv.startSession({
@@ -29,7 +57,7 @@ export class VerificationService {
     const record = await this.prisma.ageVerification.create({
       data: {
         userId: user.id,
-        vendor: "OTHER",
+        vendor: this.vendorEnum(),
         vendorSessionId: result.vendorSessionId,
         status: VerificationStatus.PENDING,
         payloadRef: result.redirectUrl ?? null,
@@ -55,7 +83,7 @@ export class VerificationService {
     const record = await this.prisma.idVerification.create({
       data: {
         userId: user.id,
-        vendor: "OTHER",
+        vendor: this.vendorEnum(),
         vendorSessionId: result.vendorSessionId,
         status: VerificationStatus.PENDING,
         payloadRef: result.redirectUrl ?? null,
@@ -78,6 +106,7 @@ export class VerificationService {
       data: {
         status,
         verifiedAt: status === "APPROVED" ? new Date() : null,
+        expiresAt: status === "APPROVED" ? this.expiryFor("age") : null,
       },
     });
     await this.compliance.emit({
@@ -100,6 +129,7 @@ export class VerificationService {
       data: {
         status,
         verifiedAt: status === "APPROVED" ? new Date() : null,
+        expiresAt: status === "APPROVED" ? this.expiryFor("id") : null,
       },
     });
     await this.compliance.emit({
@@ -140,34 +170,64 @@ export class VerificationService {
       rejected: VerificationStatus.REJECTED,
       pending: VerificationStatus.PENDING,
     } as const;
+    const next = statusMap[decision.status];
+    const targets: Array<"age" | "id"> = [];
+
+    const ageRow = await this.prisma.ageVerification.findFirst({
+      where: { vendorSessionId: decision.vendorSessionId },
+      orderBy: { createdAt: "desc" },
+    });
+    if (ageRow) {
+      await this.prisma.ageVerification.update({
+        where: { id: ageRow.id },
+        data: {
+          status: next,
+          payloadRef: decision.payloadRef ?? ageRow.payloadRef,
+          verifiedAt: next === VerificationStatus.APPROVED ? new Date() : null,
+          expiresAt: next === VerificationStatus.APPROVED ? this.expiryFor("age") : null,
+        },
+      });
+      await this.compliance.emit({
+        eventType:
+          next === VerificationStatus.APPROVED
+            ? ComplianceEventType.AGE_VERIFICATION_APPROVED
+            : next === VerificationStatus.REJECTED
+              ? ComplianceEventType.AGE_VERIFICATION_REJECTED
+              : ComplianceEventType.AGE_VERIFICATION_STARTED,
+        userId: ageRow.userId,
+        payload: { vendorSessionId: decision.vendorSessionId },
+      });
+      targets.push("age");
+    }
 
     const idRow = await this.prisma.idVerification.findFirst({
       where: { vendorSessionId: decision.vendorSessionId },
       orderBy: { createdAt: "desc" },
     });
-    if (!idRow) {
-      return { applied: false as const };
+    if (idRow) {
+      await this.prisma.idVerification.update({
+        where: { id: idRow.id },
+        data: {
+          status: next,
+          payloadRef: decision.payloadRef ?? idRow.payloadRef,
+          verifiedAt: next === VerificationStatus.APPROVED ? new Date() : null,
+          expiresAt: next === VerificationStatus.APPROVED ? this.expiryFor("id") : null,
+        },
+      });
+      await this.compliance.emit({
+        eventType:
+          next === VerificationStatus.APPROVED
+            ? ComplianceEventType.ID_VERIFICATION_APPROVED
+            : next === VerificationStatus.REJECTED
+              ? ComplianceEventType.ID_VERIFICATION_REJECTED
+              : ComplianceEventType.ID_VERIFICATION_STARTED,
+        userId: idRow.userId,
+        creatorId: idRow.userId,
+        payload: { vendorSessionId: decision.vendorSessionId },
+      });
+      targets.push("id");
     }
-    const next = statusMap[decision.status];
-    await this.prisma.idVerification.update({
-      where: { id: idRow.id },
-      data: {
-        status: next,
-        payloadRef: decision.payloadRef ?? idRow.payloadRef,
-        verifiedAt: next === VerificationStatus.APPROVED ? new Date() : null,
-      },
-    });
-    await this.compliance.emit({
-      eventType:
-        next === VerificationStatus.APPROVED
-          ? ComplianceEventType.ID_VERIFICATION_APPROVED
-          : next === VerificationStatus.REJECTED
-            ? ComplianceEventType.ID_VERIFICATION_REJECTED
-            : ComplianceEventType.ID_VERIFICATION_STARTED,
-      userId: idRow.userId,
-      creatorId: idRow.userId,
-      payload: { vendorSessionId: decision.vendorSessionId },
-    });
-    return { applied: true as const };
+
+    return { applied: targets.length > 0, targets };
   }
 }

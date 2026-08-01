@@ -1,7 +1,8 @@
-import { Body, Controller, Get, Param, Post } from "@nestjs/common";
-import { UserRole } from "@prisma/client";
+import { Body, Controller, Get, Param, Post, Query } from "@nestjs/common";
+import { UserRole, type ModerationQueueStatus } from "@prisma/client";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { RequireRole } from "../auth/role.decorator";
+import { CreateDmcaDto } from "./dto/create-dmca.dto";
 import { CreateReportDto } from "./dto/create-report.dto";
 import { ModerationService } from "./moderation.service";
 
@@ -17,6 +18,17 @@ export class ModerationController {
   @Get("reports/me")
   myReports(@CurrentUser() user: RequestUser) {
     return this.moderation.myReports(user);
+  }
+
+  @Post("dmca")
+  submitDmca(@Body() dto: CreateDmcaDto) {
+    return this.moderation.submitDmca(dto);
+  }
+
+  @Get("queue")
+  @RequireRole(UserRole.ADMIN)
+  queue(@Query("status") status?: ModerationQueueStatus) {
+    return this.moderation.listQueue(status);
   }
 
   @Post("reports/:reportId/triage")

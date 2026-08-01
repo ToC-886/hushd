@@ -15,6 +15,11 @@ export class FeedController {
     return this.feed.fanFeed(user);
   }
 
+  @Get("creator/:slug/profile")
+  creatorProfile(@CurrentUser() user: RequestUser, @Param("slug") slug: string) {
+    return this.feed.creatorProfile(slug, user);
+  }
+
   @Get("creator/:slug")
   creatorFeed(@CurrentUser() user: RequestUser, @Param("slug") slug: string) {
     return this.feed.creatorFeed(slug, user);

@@ -9,8 +9,65 @@ concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  security-events: write
+
 jobs:
   build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: hushd
+          POSTGRES_PASSWORD: hushd
+          POSTGRES_DB: hushd
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U hushd -d hushd"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://hushd:hushd@localhost:5432/hushd?schema=public
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 9
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Install
+        run: pnpm install --frozen-lockfile
+      - name: Prisma validate + generate
+        run: |
+          pnpm --filter @hushd/db exec prisma validate
+          pnpm --filter @hushd/db exec prisma generate
+      - name: Migrate deploy (clean Postgres)
+        run: pnpm --filter @hushd/db exec prisma migrate deploy
+      - name: Typecheck
+        run: pnpm turbo typecheck
+      - name: Build + lint
+        run: pnpm turbo build lint
+      - name: Test
+        run: pnpm turbo test
+
+  docker:
+    runs-on: ubuntu-latest
+    needs: build
+    strategy:
+      matrix:
+        app: [api, worker, web, admin]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.app }} image
+        run: docker build -f apps/${{ matrix.app }}/Dockerfile -t hushd-${{ matrix.app }}:ci .
+
+  security:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,22 +79,12 @@ jobs:
           node-version: 22
           cache: pnpm
       - name: Install
-        run: pnpm install --frozen-lockfile=false
-      - name: Prisma validate
-        env:
-          DATABASE_URL: postgresql://u:p@localhost:5432/db
-        run: |
-          pnpm --filter @hushd/db exec prisma validate
-          pnpm --filter @hushd/db exec prisma generate
-      - name: Migration drift check
-        env:
-          DATABASE_URL: postgresql://u:p@localhost:5432/db
-        run: pnpm --filter @hushd/db exec prisma migrate diff --from-empty --to-schema-datamodel packages/db/prisma/schema.prisma --script > /tmp/migration.sql
-      - name: Build
-        run: pnpm turbo build lint
-        env:
-          DATABASE_URL: postgresql://u:p@localhost:5432/db
-      - name: Test
-        run: pnpm turbo test
-        env:
-          DATABASE_URL: postgresql://u:p@localhost:5432/db
+        run: pnpm install --frozen-lockfile
+      - name: Dependency audit
+        run: pnpm audit --audit-level=high
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v3
+        with:
+          languages: javascript-typescript
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@v3

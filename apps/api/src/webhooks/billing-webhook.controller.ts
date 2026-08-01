@@ -1,4 +1,5 @@
-import { Body, Controller, Headers, Param, Post } from "@nestjs/common";
+import { Controller, Headers, Param, Post, RawBodyRequest, Req } from "@nestjs/common";
+import type { Request } from "express";
 import { Public } from "../auth/public.decorator";
 import { BillingWebhookService } from "../billing/billing-webhook.service";
 
@@ -11,8 +12,9 @@ export class BillingWebhookController {
   async handle(
     @Param("processorId") processorId: string,
     @Headers() headers: Record<string, string | string[] | undefined>,
-    @Body() body: unknown,
+    @Req() req: RawBodyRequest<Request>,
   ) {
-    return this.billingWebhooks.ingestWebhook(processorId, headers, body);
+    const rawBody = req.rawBody ?? Buffer.from(JSON.stringify(req.body ?? {}), "utf8");
+    return this.billingWebhooks.ingestWebhook(processorId, headers, rawBody, req.body);
   }
 }

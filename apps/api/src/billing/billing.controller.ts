@@ -30,4 +30,11 @@ export class BillingController {
   paymentHistory(@CurrentUser() user: RequestUser) {
     return this.billing.paymentHistory(user);
   }
+
+  @Get("subscriptions")
+  @UseGuards(VerificationPolicyGuard)
+  @RequireVerification("age")
+  mySubscriptions(@CurrentUser() user: RequestUser) {
+    return this.billing.mySubscriptions(user);
+  }
 }

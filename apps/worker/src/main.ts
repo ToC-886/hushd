@@ -1,88 +1,120 @@
-import { Worker } from "bullmq";
-import IORedis from "ioredis";
 import { PrismaClient } from "@prisma/client";
-import { MEDIA_PIPELINE_QUEUE, type ScanAndIngestPayload } from "@hushd/shared";
-import { NoopCsamScanProvider } from "./noop-csam.provider";
-import { promoteIfClean } from "./promote";
-import { startBillingReconciliationLoop } from "./reconcile";
-
-const connection = new IORedis(process.env.REDIS_URL ?? "redis://127.0.0.1:6379", {
-  maxRetriesPerRequest: null,
-});
-const prisma = new PrismaClient();
-
-const csam = new NoopCsamScanProvider();
-
-const worker = new Worker<ScanAndIngestPayload>(
+import {
   MEDIA_PIPELINE_QUEUE,
-  async (job) => {
-    if (job.name !== "scan_and_ingest") {
-      return;
-    }
-    const verdict = await csam.scanObject({
-      mediaId: job.data.mediaId,
-      stagingObjectKey: job.data.stagingKey,
-      contentType: job.data.contentType,
-      sha256: job.data.sha256,
+  NoopCsamScanProvider,
+  type CsamScanProvider,
+  type ScanAndIngestPayload,
+} from "@hushd/shared";
+import { Worker, type Job } from "bullmq";
+import IORedis from "ioredis";
+import { JobFailureAlerter } from "./alerts";
+import { HashListCsamProvider } from "./hashlist-csam.provider";
+import { processScanAndIngest } from "./media-pipeline";
+import { R2Storage, r2StorageConfigFromEnv } from "./r2-storage";
+import { startBillingReconciliationLoop } from "./reconcile";
+import { startVerificationExpirySweep } from "./verification-sweep";
+
+const SHUTDOWN_TIMEOUT_MS = 30_000;
+
+function createCsamProvider(): CsamScanProvider {
+  const providerId = (process.env.CSAM_PROVIDER ?? "noop").trim().toLowerCase();
+  const isProduction = process.env.NODE_ENV === "production";
+  if (providerId === "hashlist") {
+    return new HashListCsamProvider({
+      file: process.env.CSAM_HASHLIST_FILE || undefined,
+      url: process.env.CSAM_HASHLIST_URL || undefined,
+      failClosed: process.env.CSAM_FAIL_CLOSED === "true",
     });
-
-    if (verdict.status === "clean") {
-      await prisma.media.update({
-        where: { id: job.data.mediaId },
-        data: { scanStatus: "OK" },
-      });
-      await promoteIfClean({
-        mediaId: job.data.mediaId,
-        stagingKey: job.data.stagingKey,
-        ownerCreatorId: job.data.ownerCreatorId,
-        mediaType: job.data.mediaType,
-      });
-      return { status: "promoted" as const };
+  }
+  if (isProduction && (providerId === "noop" || providerId === "")) {
+    throw new Error(
+      'CSAM_PROVIDER=noop is forbidden in production — set CSAM_PROVIDER=hashlist (or a real vendor adapter) before starting the worker',
+    );
+  }
+  if (providerId !== "noop") {
+    // eslint-disable-next-line no-console
+    console.error(`unknown CSAM_PROVIDER "${providerId}", falling back to noop`);
+    if (isProduction) {
+      throw new Error(`unknown CSAM_PROVIDER "${providerId}" is not allowed in production`);
     }
+  }
+  return new NoopCsamScanProvider();
+}
 
-    // In production: enqueue moderation, delete staging object, alert on-call.
-    if (verdict.status === "error") {
-      await prisma.media.update({
-        where: { id: job.data.mediaId },
-        data: {
-          scanStatus: "QUARANTINED",
-          metadata: { pipelineError: verdict.message },
-        },
-      });
-      await prisma.moderationQueueItem.create({
-        data: {
-          targetType: "MEDIA",
-          targetId: job.data.mediaId,
-          priority: 100,
-        },
-      });
-      return { status: verdict.status, reason: verdict.message };
+async function main(): Promise<void> {
+  const connection = new IORedis(process.env.REDIS_URL ?? "redis://127.0.0.1:6379", {
+    maxRetriesPerRequest: null,
+  });
+  const prisma = new PrismaClient();
+  const storage = new R2Storage(r2StorageConfigFromEnv());
+  const csam = createCsamProvider();
+  const alerter = new JobFailureAlerter({
+    webhookUrl: process.env.ALERT_WEBHOOK_URL || undefined,
+  });
+
+  if (csam instanceof HashListCsamProvider) {
+    await csam.init();
+  }
+
+  const worker = new Worker<ScanAndIngestPayload>(
+    MEDIA_PIPELINE_QUEUE,
+    async (job: Job<ScanAndIngestPayload>) => {
+      if (job.name !== "scan_and_ingest") {
+        return;
+      }
+      return processScanAndIngest(job, { prisma, storage, csam });
+    },
+    { connection },
+  );
+
+  worker.on("ready", () => {
+    // eslint-disable-next-line no-console
+    console.log(`worker listening on queue ${MEDIA_PIPELINE_QUEUE}`, {
+      csamProvider: csam.id,
+      r2Configured: storage.isConfigured(),
+    });
+  });
+
+  worker.on("failed", (job, err) => {
+    // eslint-disable-next-line no-console
+    console.error("media-pipeline job failed", job?.id, err.message);
+    void alerter.recordFailure(job?.name ?? "unknown", err);
+  });
+
+  startBillingReconciliationLoop(prisma);
+  startVerificationExpirySweep(prisma);
+
+  let isShuttingDown = false;
+  const shutdown = async (signal: string): Promise<void> => {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    // eslint-disable-next-line no-console
+    console.log(`worker received ${signal}; draining in-flight jobs`);
+
+    const forceExit = setTimeout(() => {
+      // eslint-disable-next-line no-console
+      console.error("worker shutdown timed out; forcing exit");
+      process.exit(1);
+    }, SHUTDOWN_TIMEOUT_MS);
+    forceExit.unref();
+
+    try {
+      // Stops fetching new jobs and waits for in-flight jobs to finish.
+      await worker.close();
+      await prisma.$disconnect();
+      connection.disconnect();
+      clearTimeout(forceExit);
+      process.exit(0);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("worker shutdown error", err instanceof Error ? err.message : String(err));
+      clearTimeout(forceExit);
+      process.exit(1);
     }
-    await prisma.media.update({
-      where: { id: job.data.mediaId },
-      data: {
-        scanStatus: verdict.status === "match" ? "BLOCKED" : "QUARANTINED",
-        metadata: { reason: verdict.reasonCode },
-      },
-    });
-    await prisma.moderationQueueItem.create({
-      data: {
-        targetType: "MEDIA",
-        targetId: job.data.mediaId,
-        priority: 100,
-      },
-    });
-    return { status: verdict.status, reason: verdict.reasonCode };
-  },
-  { connection },
-);
+  };
 
-worker.on("failed", (job, err) => {
-  // eslint-disable-next-line no-console
-  console.error("job_failed", job?.id, err);
-});
+  process.on("SIGINT", () => void shutdown("SIGINT"));
+  process.on("SIGTERM", () => void shutdown("SIGTERM"));
+}
 
-// eslint-disable-next-line no-console
-console.log(`worker listening on queue ${MEDIA_PIPELINE_QUEUE}`);
-
-startBillingReconciliationLoop();
+void main();

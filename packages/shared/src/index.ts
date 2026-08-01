@@ -1,4 +1,6 @@
 export * from "./adapters/payment-processor";
+export * from "./adapters/segpay-stub.processor";
+export * from "./adapters/ccbill-stub.processor";
 export * from "./adapters/id-verification";
 export * from "./adapters/csam-scan";
 export * from "./adapters/email";

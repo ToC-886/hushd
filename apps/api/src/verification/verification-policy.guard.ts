@@ -23,8 +23,12 @@ export class VerificationPolicyGuard implements CanActivate {
     const user = req.user;
     if (!user) throw new ForbiddenException("auth_required");
 
+    // An APPROVED record only counts while it is unexpired — documents lapse
+    // and must be re-verified (see the worker expiry sweep).
+    const notExpired = { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] };
+
     const ageApproved = await this.prisma.ageVerification.findFirst({
-      where: { userId: user.id, status: "APPROVED" },
+      where: { userId: user.id, status: "APPROVED", ...notExpired },
       select: { id: true },
     });
     if (!ageApproved) {
@@ -38,7 +42,7 @@ export class VerificationPolicyGuard implements CanActivate {
       throw new ForbiddenException("creator_role_required");
     }
     const idApproved = await this.prisma.idVerification.findFirst({
-      where: { userId: user.id, status: "APPROVED" },
+      where: { userId: user.id, status: "APPROVED", ...notExpired },
       select: { id: true },
     });
     if (!idApproved) {

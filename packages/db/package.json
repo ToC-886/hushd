@@ -9,7 +9,8 @@
     "migrate:deploy": "prisma migrate deploy",
     "studio": "prisma studio",
     "lint": "echo \"no lint configured for db package\"",
-    "test": "echo \"no tests for db package\""
+    "test": "echo \"no tests for db package\"",
+    "typecheck": "prisma validate"
   },
   "dependencies": {
     "@prisma/client": "^6.1.0"

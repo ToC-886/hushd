@@ -7,11 +7,13 @@
     "dev": "nest start --watch",
     "start": "node dist/main.js",
     "lint": "eslint \"src/**/*.ts\"",
-    "test": "jest"
+    "test": "jest",
+    "typecheck": "tsc --noEmit -p tsconfig.build.json && tsc --noEmit -p tsconfig.spec.json"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.924.0",
     "@aws-sdk/s3-request-presigner": "^3.924.0",
+    "@hushd/db": "workspace:*",
     "@hushd/shared": "workspace:*",
     "@nestjs/common": "^10.4.15",
     "@nestjs/config": "^3.3.0",
@@ -20,10 +22,12 @@
     "@nestjs/platform-express": "^10.4.15",
     "@nestjs/throttler": "^6.3.0",
     "@prisma/client": "^6.19.0",
+    "@sentry/node": "^10.69.0",
     "bcryptjs": "^2.4.3",
     "bullmq": "^5.34.3",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.1",
+    "helmet": "^8.3.0",
     "ioredis": "^5.4.2",
     "otplib": "^12.0.1",
     "reflect-metadata": "^0.2.2",

@@ -1,25 +1,45 @@
 openapi: 3.1.0
 info:
   title: hushd API
-  version: 0.3.0
-  description: Enterprise roadmap API skeleton covering auth, verification, billing, creator flows, media, messaging, and admin controls.
+  version: 0.7.0
+  description: |
+    hushd platform API: auth, verification, compliance (2257), billing, creator
+    flows, media pipeline, messaging, payouts, moderation, and admin controls.
+
+    ## Authentication
+
+    Protected endpoints accept either:
+
+    - `Authorization: Bearer <accessToken>` (API clients, tests), or
+    - the `hushd_access` HttpOnly cookie set by `/auth/login`, `/auth/register`,
+      `/auth/verify-email`, and `/auth/refresh` (browser frontends).
+
+    Cookie-authenticated **mutating** requests must also send
+    `X-Requested-With: XMLHttpRequest` (CSRF backstop). The refresh token
+    travels in the `hushd_refresh` HttpOnly cookie scoped to `/v1/auth`;
+    `/auth/refresh` and `/auth/logout` also accept it in the JSON body for
+    non-browser clients.
 servers:
   - url: https://api.example.com/v1
     description: Production
-  - url: http://localhost:4000/v1
+  - url: http://localhost:3001/v1
     description: Local
 tags:
   - name: health
   - name: auth
   - name: verification
+  - name: compliance
   - name: billing
   - name: creator
   - name: feed
   - name: media
   - name: messages
+  - name: payouts
+  - name: moderation
   - name: admin
   - name: analytics
   - name: risk
+  - name: metrics
   - name: webhooks
 paths:
   /health:
@@ -30,10 +50,25 @@ paths:
       responses:
         "200":
           description: OK
+  /health/ready:
+    get:
+      tags: [health]
+      summary: Readiness probe (database connectivity)
+      operationId: healthReady
+      responses:
+        "200":
+          description: Ready
+        "503":
+          description: Not ready
   /auth/register:
     post:
       tags: [auth]
       summary: Register account
+      description: |
+        Issues tokens and sets the auth cookies when the account activates
+        immediately (dev bypass). Otherwise returns `pendingVerification` and
+        sends a verification email — no session is created until the email
+        token round-trips.
       operationId: authRegister
       requestBody:
         required: true
@@ -43,11 +78,15 @@ paths:
               $ref: "#/components/schemas/RegisterRequest"
       responses:
         "201":
-          description: Tokens issued
+          description: Tokens issued, or pending email verification
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/AuthTokensResponse"
+                oneOf:
+                  - $ref: "#/components/schemas/AuthTokensResponse"
+                  - $ref: "#/components/schemas/PendingVerificationResponse"
+        "409":
+          description: email_in_use
   /auth/login:
     post:
       tags: [auth]
@@ -61,52 +100,172 @@ paths:
               $ref: "#/components/schemas/LoginRequest"
       responses:
         "200":
-          description: Tokens issued
+          description: Tokens issued (auth cookies set)
           content:
             application/json:
               schema:
                 $ref: "#/components/schemas/AuthTokensResponse"
+        "401":
+          description: invalid_credentials | totp_required | invalid_totp
+        "403":
+          description: email_not_verified | account_not_active
   /auth/refresh:
     post:
       tags: [auth]
       summary: Rotate refresh token
+      description: |
+        Reads the refresh token from the request body or, for browser clients,
+        from the `hushd_refresh` HttpOnly cookie. Rotates the session and sets
+        fresh cookies. Reuse of a revoked refresh token revokes all sessions
+        for the user.
       operationId: authRefresh
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/RefreshRequest"
       responses:
         "200":
-          description: Tokens issued
+          description: Tokens issued (auth cookies set)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokensResponse"
+        "401":
+          description: invalid_refresh | refresh_reuse
   /auth/logout:
     post:
       tags: [auth]
       summary: Revoke refresh token session
+      description: Idempotent — always clears the auth cookies and returns ok.
       operationId: authLogout
       requestBody:
-        required: true
+        required: false
         content:
           application/json:
             schema:
               $ref: "#/components/schemas/RefreshRequest"
       responses:
         "200":
-          description: Session revoked
+          description: Session revoked, cookies cleared
+  /auth/verify-email:
+    post:
+      tags: [auth]
+      summary: Consume an email verification token
+      description: Activates a PENDING account and issues a session.
+      operationId: authVerifyEmail
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VerifyEmailRequest"
+      responses:
+        "200":
+          description: Tokens issued (auth cookies set)
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/AuthTokensResponse"
+        "400":
+          description: invalid_or_expired_token
+  /auth/verify-email/resend:
+    post:
+      tags: [auth]
+      summary: Resend the verification email
+      description: Always succeeds — the response never reveals whether the email exists.
+      operationId: authResendVerification
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailAddressRequest"
+      responses:
+        "200":
+          description: ok
+  /auth/password-reset/request:
+    post:
+      tags: [auth]
+      summary: Request a password reset email
+      description: Always succeeds — the response never reveals whether the email exists.
+      operationId: authRequestPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmailAddressRequest"
+      responses:
+        "200":
+          description: ok
+  /auth/password-reset/confirm:
+    post:
+      tags: [auth]
+      summary: Consume a password reset token
+      description: Sets the new password and revokes all existing sessions.
+      operationId: authConfirmPasswordReset
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PasswordResetConfirmRequest"
+      responses:
+        "200":
+          description: Password updated
+        "400":
+          description: invalid_or_expired_token
   /auth/me:
     get:
       tags: [auth]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Current user profile
       operationId: authMe
       responses:
         "200":
           description: User profile
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MeResponse"
+        "401":
+          description: Not authenticated
+  /auth/totp/setup:
+    post:
+      tags: [auth]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Generate a TOTP secret (creators only)
+      operationId: authTotpSetup
+      responses:
+        "200":
+          description: otpauth URL for enrolment
+        "403":
+          description: creators_only
+  /auth/totp/enable:
+    post:
+      tags: [auth]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Enable TOTP with a verification code (creators only)
+      operationId: authTotpEnable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TotpEnableRequest"
+      responses:
+        "200":
+          description: TOTP enabled
+        "400":
+          description: totp_not_setup | totp_already_enabled
+        "401":
+          description: invalid_totp
   /verification/status:
     get:
       tags: [verification]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Get age/id verification status
       operationId: verificationStatus
       responses:
@@ -115,7 +274,7 @@ paths:
   /verification/age/start:
     post:
       tags: [verification]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Start age verification session
       operationId: verificationAgeStart
       requestBody:
@@ -130,7 +289,7 @@ paths:
   /verification/id/start:
     post:
       tags: [verification]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Start creator identity verification
       operationId: verificationIdStart
       requestBody:
@@ -142,10 +301,87 @@ paths:
       responses:
         "200":
           description: Verification session
+  /verification/admin/age/{verificationId}/approve:
+    post:
+      tags: [verification]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Manually approve an age verification (admin)
+      operationId: verificationAdminAgeApprove
+      parameters:
+        - $ref: "#/components/parameters/verificationId"
+      responses:
+        "200":
+          description: Approved
+  /verification/admin/age/{verificationId}/reject:
+    post:
+      tags: [verification]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Manually reject an age verification (admin)
+      operationId: verificationAdminAgeReject
+      parameters:
+        - $ref: "#/components/parameters/verificationId"
+      responses:
+        "200":
+          description: Rejected
+  /verification/admin/id/{verificationId}/approve:
+    post:
+      tags: [verification]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Manually approve an identity verification (admin)
+      operationId: verificationAdminIdApprove
+      parameters:
+        - $ref: "#/components/parameters/verificationId"
+      responses:
+        "200":
+          description: Approved
+  /verification/admin/id/{verificationId}/reject:
+    post:
+      tags: [verification]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Manually reject an identity verification (admin)
+      operationId: verificationAdminIdReject
+      parameters:
+        - $ref: "#/components/parameters/verificationId"
+      responses:
+        "200":
+          description: Rejected
+  /compliance/2257:
+    post:
+      tags: [compliance]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Submit 2257 identity record (creators)
+      operationId: compliance2257Submit
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/Submit2257Request"
+      responses:
+        "201":
+          description: Record stored (sealed at rest)
+  /compliance/2257/me:
+    get:
+      tags: [compliance]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Own 2257 record status
+      operationId: compliance2257Me
+      responses:
+        "200":
+          description: Record status
+  /compliance/2257/records:
+    get:
+      tags: [compliance]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: List 2257 records (admin)
+      operationId: compliance2257Records
+      responses:
+        "200":
+          description: Records
   /billing/subscriptions/checkout:
     post:
       tags: [billing]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Create processor checkout session
       operationId: billingCheckout
       requestBody:
@@ -157,10 +393,19 @@ paths:
       responses:
         "200":
           description: Checkout session
+  /billing/subscriptions:
+    get:
+      tags: [billing]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Own subscriptions
+      operationId: billingSubscriptions
+      responses:
+        "200":
+          description: Subscription rows
   /billing/subscriptions/cancel:
     post:
       tags: [billing]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Cancel subscription
       operationId: billingCancelSubscription
       requestBody:
@@ -175,44 +420,137 @@ paths:
   /billing/history:
     get:
       tags: [billing]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Payment history
       operationId: billingHistory
       responses:
         "200":
           description: Transaction rows
+  /creator/profile:
+    patch:
+      tags: [creator]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Update creator profile (display name, bio, country)
+      operationId: creatorProfileUpdate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateCreatorProfileRequest"
+      responses:
+        "200":
+          description: Profile updated
   /creator/tiers:
+    get:
+      tags: [creator]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: List own subscription tiers
+      operationId: creatorTierList
+      responses:
+        "200":
+          description: Tiers
     post:
       tags: [creator]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Create subscription tier
       operationId: creatorTierCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTierRequest"
       responses:
         "201":
           description: Tier created
+  /creator/tiers/{tierId}:
+    patch:
+      tags: [creator]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Update a subscription tier
+      operationId: creatorTierUpdate
+      parameters:
+        - name: tierId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTierRequest"
+      responses:
+        "200":
+          description: Tier updated
   /creator/posts:
     post:
       tags: [creator]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Publish creator post
       operationId: creatorPostCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePostRequest"
       responses:
         "201":
           description: Post created
+  /creator/dashboard:
+    get:
+      tags: [creator]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Creator dashboard aggregates
+      operationId: creatorDashboard
+      responses:
+        "200":
+          description: Dashboard summary
   /feed/me:
     get:
       tags: [feed]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Fan entitlement-aware feed
       operationId: feedMe
       responses:
         "200":
           description: Feed rows
+  /feed/creator/{slug}:
+    get:
+      tags: [feed]
+      summary: Public creator post listing (entitlement-filtered when authenticated)
+      operationId: feedCreatorPosts
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Public/unlocked posts
+  /feed/creator/{slug}/profile:
+    get:
+      tags: [feed]
+      summary: Public creator profile with tiers
+      operationId: feedCreatorProfile
+      parameters:
+        - name: slug
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Creator profile
+        "404":
+          description: creator_not_found
   /media/uploads/init:
     post:
       tags: [media]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Create staging upload target
+      description: MIME type and byte size are required and validated before a presigned URL is issued.
       operationId: mediaUploadsInit
       requestBody:
         required: true
@@ -223,10 +561,12 @@ paths:
       responses:
         "200":
           description: Presigned upload target
+        "400":
+          description: content_type_must_be_media | validation failed
   /media/uploads/complete:
     post:
       tags: [media]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Enqueue scan and ingest
       operationId: mediaUploadsComplete
       requestBody:
@@ -238,19 +578,70 @@ paths:
       responses:
         "200":
           description: Job accepted
+  /media/{mediaId}:
+    get:
+      tags: [media]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Media asset status/details
+      operationId: mediaGet
+      parameters:
+        - name: mediaId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Media asset
+        "404":
+          description: Not found
   /messages/send:
     post:
       tags: [messages]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Send direct message (optional PPV)
       operationId: messagesSend
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/SendMessageRequest"
       responses:
         "201":
           description: Message created
+  /messages/tips:
+    post:
+      tags: [messages]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Send a tip to a creator
+      operationId: messagesTip
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/TipRequest"
+      responses:
+        "201":
+          description: Tip recorded
+  /messages/conversation/{creatorId}:
+    get:
+      tags: [messages]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Conversation with a creator
+      operationId: messagesConversation
+      parameters:
+        - name: creatorId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Conversation with messages
   /messages/{messageId}/unlock:
     post:
       tags: [messages]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Unlock PPV message
       operationId: messagesUnlock
       parameters:
@@ -261,37 +652,328 @@ paths:
       responses:
         "200":
           description: Unlocked
+  /payouts/accounts:
+    get:
+      tags: [payouts]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: List own payout accounts
+      operationId: payoutAccountList
+      responses:
+        "200":
+          description: Payout accounts (references redacted to last four)
+    post:
+      tags: [payouts]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Add a payout account (creators)
+      operationId: payoutAccountCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreatePayoutAccountRequest"
+      responses:
+        "201":
+          description: Account created
+  /payouts/balance:
+    get:
+      tags: [payouts]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Available payout balance (creators)
+      operationId: payoutBalance
+      responses:
+        "200":
+          description: Balance
+  /payouts/request:
+    post:
+      tags: [payouts]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Request a payout (creators)
+      operationId: payoutRequest
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RequestPayoutRequest"
+      responses:
+        "201":
+          description: Payout requested
+        "409":
+          description: payout_auto_hold (risk hold) or insufficient balance
+  /payouts/me:
+    get:
+      tags: [payouts]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Own payout history (creators)
+      operationId: payoutHistory
+      responses:
+        "200":
+          description: Payout rows
+  /moderation/reports:
+    post:
+      tags: [moderation]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: File a content/user report
+      operationId: moderationReportCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateReportRequest"
+      responses:
+        "201":
+          description: Report created
+  /moderation/reports/me:
+    get:
+      tags: [moderation]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Own submitted reports
+      operationId: moderationReportMine
+      responses:
+        "200":
+          description: Reports
+  /moderation/dmca:
+    post:
+      tags: [moderation]
+      summary: File a DMCA takedown notice (public intake)
+      operationId: moderationDmcaCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateDmcaRequest"
+      responses:
+        "201":
+          description: Notice recorded
+  /moderation/queue:
+    get:
+      tags: [moderation]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Moderation queue (moderator/admin)
+      operationId: moderationQueue
+      responses:
+        "200":
+          description: Queue items
+  /moderation/reports/{reportId}/triage:
+    post:
+      tags: [moderation]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Triage a report (moderator/admin)
+      operationId: moderationReportTriage
+      parameters:
+        - name: reportId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Triaged
   /admin/moderation/queue:
     get:
       tags: [admin]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Moderation queue for admins
       operationId: adminModerationQueue
       responses:
         "200":
           description: Queue items
+  /admin/moderation/queue/{id}/resolve:
+    post:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Resolve a moderation queue item
+      operationId: adminModerationResolve
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Resolved
+  /admin/payouts:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: List payouts for review
+      operationId: adminPayoutList
+      responses:
+        "200":
+          description: Payout rows
+  /admin/payouts/{payoutId}/approve:
+    post:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Approve a pending payout
+      operationId: adminPayoutApprove
+      parameters:
+        - $ref: "#/components/parameters/payoutId"
+      responses:
+        "200":
+          description: Approved
+  /admin/payouts/{payoutId}/paid:
+    post:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Mark an approved payout as paid
+      operationId: adminPayoutPaid
+      parameters:
+        - $ref: "#/components/parameters/payoutId"
+      responses:
+        "200":
+          description: Marked paid
+  /admin/payouts/{payoutId}/cancel:
+    post:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Cancel a payout
+      operationId: adminPayoutCancel
+      parameters:
+        - $ref: "#/components/parameters/payoutId"
+      responses:
+        "200":
+          description: Canceled
+  /admin/risk/holds:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: List active risk holds
+      operationId: adminRiskHolds
+      responses:
+        "200":
+          description: Holds
+  /admin/risk/holds/{holdId}/release:
+    post:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Release a risk hold
+      operationId: adminRiskHoldRelease
+      parameters:
+        - name: holdId
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      responses:
+        "200":
+          description: Released
   /admin/fraud/dashboard:
     get:
       tags: [admin]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Fraud dashboard aggregates
       operationId: adminFraudDashboard
       responses:
         "200":
           description: Fraud summary
+  /admin/compliance/export:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Export compliance records (2257)
+      operationId: adminComplianceExport
+      responses:
+        "200":
+          description: Export payload
+  /admin/geo-blocks:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: List geo-block rules
+      operationId: adminGeoBlockList
+      responses:
+        "200":
+          description: Rules
+    post:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Create a geo-block rule
+      operationId: adminGeoBlockCreate
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateGeoBlockRequest"
+      responses:
+        "201":
+          description: Rule created
+  /admin/geo-blocks/{countryCode}:
+    delete:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Delete geo-block rule(s) for a country
+      operationId: adminGeoBlockDelete
+      parameters:
+        - name: countryCode
+          in: path
+          required: true
+          schema: { type: string, pattern: "^[A-Za-z]{2}$" }
+      responses:
+        "200":
+          description: Deleted
+  /admin/dmca:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: List DMCA notices
+      operationId: adminDmcaList
+      responses:
+        "200":
+          description: Notices
+  /admin/dmca/{id}/status:
+    post:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Update DMCA notice status / legal hold
+      operationId: adminDmcaStatus
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema: { type: string, format: uuid }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateDmcaStatusRequest"
+      responses:
+        "200":
+          description: Updated
+  /admin/audit-logs:
+    get:
+      tags: [admin]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Admin audit log
+      operationId: adminAuditLogs
+      responses:
+        "200":
+          description: Audit rows
   /analytics/creator/me:
     get:
       tags: [analytics]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Creator analytics snapshot
       operationId: analyticsCreatorMe
       responses:
         "200":
           description: Analytics summary
+  /analytics/admin/churn:
+    get:
+      tags: [analytics]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
+      summary: Churn analytics (admin)
+      operationId: analyticsAdminChurn
+      responses:
+        "200":
+          description: Churn summary
   /risk/payout/{creatorId}:
     get:
       tags: [risk]
-      security: [{ bearerAuth: [] }]
+      security: [{ bearerAuth: [] }, { cookieAuth: [] }]
       summary: Payout risk scoring
       operationId: riskPayout
       parameters:
@@ -302,10 +984,19 @@ paths:
       responses:
         "200":
           description: Risk summary
+  /metrics:
+    get:
+      tags: [metrics]
+      summary: Prometheus metrics
+      operationId: metricsGet
+      responses:
+        "200":
+          description: Prometheus text exposition format
   /webhooks/billing/{processorId}:
     post:
       tags: [webhooks]
       summary: Processor billing webhook endpoint
+      description: Raw-body signature-verified intake; events are persisted before processing and FAILED events are reprocessable.
       operationId: webhookBilling
       parameters:
         - name: processorId
@@ -334,13 +1025,29 @@ components:
       type: http
       scheme: bearer
       bearerFormat: JWT
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: hushd_access
+      description: HttpOnly session cookie set by the auth endpoints.
+  parameters:
+    verificationId:
+      name: verificationId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    payoutId:
+      name: payoutId
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
   schemas:
     RegisterRequest:
       type: object
       required: [email, password]
       properties:
         email: { type: string, format: email }
-        password: { type: string, minLength: 12 }
+        password: { type: string, minLength: 12, maxLength: 72 }
         role: { type: string, enum: [FAN, CREATOR] }
     LoginRequest:
       type: object
@@ -348,23 +1055,55 @@ components:
       properties:
         email: { type: string, format: email }
         password: { type: string }
+        totpCode: { type: string, pattern: '^\d{6}$', description: Required when TOTP is enabled }
     RefreshRequest:
       type: object
-      required: [refreshToken]
       properties:
-        refreshToken: { type: string }
+        refreshToken:
+          type: string
+          description: Optional in the body — browser clients send it via the hushd_refresh cookie.
+    EmailAddressRequest:
+      type: object
+      required: [email]
+      properties:
+        email: { type: string, format: email }
+    VerifyEmailRequest:
+      type: object
+      required: [token]
+      properties:
+        token: { type: string }
+    PasswordResetConfirmRequest:
+      type: object
+      required: [token, password]
+      properties:
+        token: { type: string }
+        password: { type: string, minLength: 12, maxLength: 72 }
+    TotpEnableRequest:
+      type: object
+      required: [code]
+      properties:
+        code: { type: string, pattern: '^\d{6}$' }
     StartVerificationRequest:
       type: object
       required: [returnUrl]
       properties:
         returnUrl: { type: string, format: uri }
         locale: { type: string }
+    Submit2257Request:
+      type: object
+      required: [legalFullName, dateOfBirth, documentType, documentNumber]
+      properties:
+        legalFullName: { type: string, minLength: 2, maxLength: 200 }
+        dateOfBirth: { type: string, format: date, description: Must place the creator at 18+ }
+        documentType: { type: string, example: PASSPORT }
+        documentNumber: { type: string, minLength: 3, maxLength: 120 }
+        issuedBy: { type: string }
     CreateSubscriptionCheckoutRequest:
       type: object
       required: [creatorSlug, tierId, successReturnUrl, cancelReturnUrl]
       properties:
         creatorSlug: { type: string }
-        tierId: { type: string, format: uuid }
+        tierId: { type: string }
         successReturnUrl: { type: string, format: uri }
         cancelReturnUrl: { type: string, format: uri }
     CancelSubscriptionRequest:
@@ -373,13 +1112,47 @@ components:
       properties:
         subscriptionId: { type: string, format: uuid }
         reason: { type: string }
+    UpdateCreatorProfileRequest:
+      type: object
+      properties:
+        displayName: { type: string, minLength: 1, maxLength: 80 }
+        bio: { type: string, maxLength: 2000 }
+        countryCode: { type: string, pattern: "^[A-Za-z]{2}$" }
+    CreateTierRequest:
+      type: object
+      required: [title, priceCents]
+      properties:
+        title: { type: string }
+        description: { type: string }
+        priceCents: { type: integer, minimum: 100, maximum: 1000000 }
+        interval: { type: string, enum: [MONTH, YEAR] }
+        trialDays: { type: integer, minimum: 0, maximum: 30 }
+    UpdateTierRequest:
+      type: object
+      properties:
+        title: { type: string }
+        description: { type: string }
+        priceCents: { type: integer, minimum: 100, maximum: 1000000 }
+        trialDays: { type: integer, minimum: 0, maximum: 30 }
+        active: { type: boolean }
+    CreatePostRequest:
+      type: object
+      required: [visibility]
+      properties:
+        body: { type: string }
+        visibility: { type: string, enum: [PUBLIC, SUBSCRIBERS, TIER_LOCKED] }
+        lockedTierId: { type: string, format: uuid }
+        mediaIds:
+          type: array
+          items: { type: string, format: uuid }
     InitUploadRequest:
       type: object
-      required: [ownerCreatorId, mediaType]
+      required: [ownerCreatorId, mediaType, contentType, byteSize]
       properties:
         ownerCreatorId: { type: string, format: uuid }
         mediaType: { type: string, enum: [IMAGE, VIDEO, AUDIO, OTHER] }
-        contentType: { type: string }
+        contentType: { type: string, pattern: "^(image|video|audio)/" }
+        byteSize: { type: integer, minimum: 1, maximum: 524288000 }
     CompleteUploadRequest:
       type: object
       required: [mediaId, ownerCreatorId, stagingKey, mediaType]
@@ -390,6 +1163,91 @@ components:
         mediaType: { type: string, enum: [IMAGE, VIDEO, AUDIO, OTHER] }
         contentType: { type: string }
         sha256: { type: string }
+    SendMessageRequest:
+      type: object
+      required: [creatorId]
+      properties:
+        creatorId: { type: string, format: uuid }
+        fanUserId: { type: string, format: uuid, description: Required when the sender is the creator }
+        body: { type: string }
+        ppvPriceCents: { type: integer, minimum: 100, description: Creators only }
+        currency: { type: string }
+    TipRequest:
+      type: object
+      required: [creatorId, amountCents]
+      properties:
+        creatorId: { type: string, format: uuid }
+        postId: { type: string, format: uuid }
+        messageId: { type: string, format: uuid }
+        amountCents: { type: integer, minimum: 100 }
+        currency: { type: string }
+    CreatePayoutAccountRequest:
+      type: object
+      required: [method, accountReference]
+      properties:
+        method: { type: string, enum: [SEPA, ACH, WIRE, OTHER] }
+        label: { type: string, maxLength: 80 }
+        accountReference: { type: string, minLength: 4, maxLength: 200, description: Sealed at rest; only last four are exposed }
+        currency: { type: string, pattern: "^[A-Z]{3}$" }
+    RequestPayoutRequest:
+      type: object
+      properties:
+        payoutAccountId: { type: string, format: uuid, description: Defaults to the most recent active account }
+        amountCents: { type: integer, minimum: 1, description: Defaults to the full available balance }
+    CreateReportRequest:
+      type: object
+      required: [targetType, targetId, reason]
+      properties:
+        targetType: { type: string, enum: [POST, MESSAGE, USER, MEDIA] }
+        targetId: { type: string }
+        reason: { type: string }
+    CreateDmcaRequest:
+      type: object
+      required: [claimantRef, targetRefs]
+      properties:
+        claimantRef: { type: string, minLength: 3, maxLength: 200 }
+        targetRefs:
+          type: array
+          minItems: 1
+          maxItems: 50
+          items: { type: string }
+        notesRef: { type: string, maxLength: 500 }
+    CreateGeoBlockRequest:
+      type: object
+      required: [countryCode, scope]
+      properties:
+        countryCode: { type: string, pattern: "^[A-Za-z]{2}$" }
+        scope: { type: string, enum: [ACCESS, PAYOUTS] }
+        reason: { type: string, maxLength: 500 }
+    UpdateDmcaStatusRequest:
+      type: object
+      required: [status]
+      properties:
+        status: { type: string, enum: [RECEIVED, UNDER_REVIEW, ACTIONED, REJECTED, CLOSED] }
+        legalHold: { type: boolean }
+    PendingVerificationResponse:
+      type: object
+      required: [pendingVerification, user]
+      properties:
+        pendingVerification: { type: boolean, enum: [true] }
+        user:
+          type: object
+          properties:
+            id: { type: string, format: uuid }
+            email: { type: string, format: email }
+    MeResponse:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string, format: email }
+        roles:
+          type: array
+          items: { type: string, enum: [FAN, CREATOR, ADMIN, MODERATOR] }
+        status: { type: string, enum: [PENDING, ACTIVE, SUSPENDED, DELETED] }
+        emailVerified: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        creatorSlug: { type: string, nullable: true }
+        totpEnabled: { type: boolean }
     AuthTokensResponse:
       type: object
       required: [accessToken, refreshToken, tokenType, expiresIn, user]

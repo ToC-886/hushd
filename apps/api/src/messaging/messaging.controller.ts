@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from "@nestjs/common";
+import { Body, Controller, Get, Param, Post, Query, UseGuards } from "@nestjs/common";
 import { CurrentUser, type RequestUser } from "../auth/current-user.decorator";
 import { VerificationPolicyGuard } from "../verification/verification-policy.guard";
 import { RequireVerification } from "../verification/verification.decorator";
@@ -28,7 +28,11 @@ export class MessagingController {
   }
 
   @Get("conversation/:creatorId")
-  conversation(@CurrentUser() user: RequestUser, @Param("creatorId") creatorId: string) {
-    return this.messaging.conversation(user, creatorId);
+  conversation(
+    @CurrentUser() user: RequestUser,
+    @Param("creatorId") creatorId: string,
+    @Query("fanUserId") fanUserId?: string,
+  ) {
+    return this.messaging.conversation(user, creatorId, fanUserId);
   }
 }

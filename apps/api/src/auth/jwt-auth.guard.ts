@@ -3,6 +3,7 @@ import { ConfigService } from "@nestjs/config";
 import { Reflector } from "@nestjs/core";
 import { JwtService } from "@nestjs/jwt";
 import { IS_PUBLIC_KEY } from "./constants";
+import { ACCESS_COOKIE, parseCookies } from "./cookies";
 import type { RequestUser } from "./current-user.decorator";
 
 type AccessPayload = {
@@ -12,6 +13,11 @@ type AccessPayload = {
   typ?: string;
 };
 
+/**
+ * Authenticates via `Authorization: Bearer` header first, falling back to the
+ * HttpOnly access cookie set at login. Header auth covers API clients and
+ * tests; cookie auth covers the browser frontends.
+ */
 @Injectable()
 export class JwtAuthGuard implements CanActivate {
   constructor(
@@ -27,12 +33,13 @@ export class JwtAuthGuard implements CanActivate {
     ]);
     if (isPublic) return true;
 
-    const req = context.switchToHttp().getRequest<{ headers: Record<string, string | undefined>; user?: RequestUser }>();
-    const header = req.headers.authorization ?? req.headers.Authorization;
-    if (typeof header !== "string" || !header.startsWith("Bearer ")) {
-      throw new UnauthorizedException("missing_bearer");
+    const req = context
+      .switchToHttp()
+      .getRequest<{ headers: Record<string, string | undefined>; user?: RequestUser }>();
+    const token = this.extractToken(req.headers);
+    if (!token) {
+      throw new UnauthorizedException("missing_credentials");
     }
-    const token = header.slice("Bearer ".length).trim();
     try {
       const payload = this.jwt.verify<AccessPayload>(token, {
         secret: this.config.getOrThrow<string>("JWT_ACCESS_SECRET"),
@@ -45,5 +52,15 @@ export class JwtAuthGuard implements CanActivate {
     } catch {
       throw new UnauthorizedException("invalid_token");
     }
+  }
+
+  private extractToken(headers: Record<string, string | undefined>): string | null {
+    const header = headers.authorization ?? headers.Authorization;
+    if (typeof header === "string" && header.startsWith("Bearer ")) {
+      const token = header.slice("Bearer ".length).trim();
+      if (token) return token;
+    }
+    const cookieToken = parseCookies(headers.cookie)[ACCESS_COOKIE];
+    return cookieToken || null;
   }
 }

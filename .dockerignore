@@ -1,0 +1,43 @@
+# VCS / editor
+.git
+.gitignore
+.github
+.vscode
+.idea
+
+# Secrets & local env — never bake into an image
+.env
+.env.*
+!.env.example
+
+# Node / build artifacts (rebuilt inside the image)
+node_modules
+**/node_modules
+**/dist
+**/.next
+**/.turbo
+**/out
+**/build
+*.tsbuildinfo
+coverage
+**/coverage
+
+# OS / misc
+.DS_Store
+Thumbs.db
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Docs & audit artifacts not needed at runtime
+docs
+roadmap-extract.md
+
+# Local infra / dev-only
+infra
+docker-compose.yml
+
+# Tests are not needed in the runtime image build context is fine to keep,
+# but drop common large/irrelevant dirs
+**/*.md
+!README.md

@@ -11,6 +11,10 @@
     },
     "lint": {},
     "test": {},
+    "typecheck": {
+      "dependsOn": ["^build"],
+      "env": ["DATABASE_URL"]
+    },
     "generate": {
       "cache": false
     }

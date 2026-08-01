@@ -1,60 +1,103 @@
 # hushd
 
-Monorepo for a compliance-first creator subscription platform (web-first).
+Compliance-first creator subscription platform (web-first monorepo).
 
-## Packages
+**Production readiness:** see [`docs/PRODUCTION_READINESS.md`](docs/PRODUCTION_READINESS.md) — currently **CONDITIONALLY READY** (external processors, CSAM, email/IDV, and cookie auth remain before open launch).
+
+## Architecture summary
 
 | Path | Role |
 |------|------|
-| `apps/web` | Fan + creator Next.js (App Router, Tailwind v4) |
-| `apps/admin` | Admin Next.js shell |
-| `apps/api` | NestJS HTTP API + webhooks |
-| `apps/worker` | BullMQ workers (media pipeline) |
+| `apps/web` | Fan + creator Next.js 15 (App Router, Tailwind v4) |
+| `apps/admin` | Admin Next.js console |
+| `apps/api` | NestJS HTTP API + webhooks (`/v1`) |
+| `apps/worker` | BullMQ workers (media, reconcile, sweeps) |
 | `packages/db` | Prisma schema + migrations |
-| `packages/shared` | Adapters, money helpers, webhook utilities, job types |
-| `infra/terraform` | Infrastructure skeleton modules |
-| `docs/` | Architecture, OpenAPI skeleton, runbooks, security checklist |
+| `packages/shared` | Adapters, money helpers, webhooks, jobs |
+| `infra/terraform` | Infrastructure skeleton |
+| `docs/` | Architecture, ADRs, audit, runbooks, OpenAPI |
 
-## Local development
+Details: [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md).
 
-1. Copy [`.env.example`](./.env.example) to `.env` and fill values.
-2. Start Postgres and Redis (for example `docker compose up -d` using [`docker-compose.yml`](./docker-compose.yml)).
-3. Install and run:
+## Prerequisites
+
+- Node.js 22+
+- pnpm 9.14.2 (`packageManager` field)
+- Docker (optional) for Postgres/Redis
+- PostgreSQL 16 + Redis 7
+
+## Local installation
 
 ```bash
+cp .env.example .env
+docker compose up -d   # Postgres on localhost:5433, Redis on 6379
+# Point DATABASE_URL at :5433 when using compose (see comment in .env.example)
 pnpm install
 pnpm db:generate
+pnpm db:migrate:deploy   # or pnpm db:migrate for interactive dev
 pnpm dev
 ```
 
-`pnpm dev` runs Turborepo dev tasks for all apps; use per-package scripts for focused work.
+| App | Default URL |
+|-----|-------------|
+| Web | http://localhost:3000 |
+| Admin | http://localhost:3010 |
+| API | http://localhost:3001/v1 |
 
-## Authentication (`apps/api`)
+## Validation commands
 
-- `POST /v1/auth/register` — email + password; optional `role` (`FAN` default, `CREATOR` creates profile + slug).
-- `POST /v1/auth/login` — bcrypt-verified login; issues **access** + **refresh** JWTs.
-- `POST /v1/auth/refresh` — refresh rotation (revokes prior session on success; reuse revokes all sessions for the user).
-- `POST /v1/auth/logout` — revokes the refresh session.
-- `GET /v1/auth/me` — bearer access token.
-- `POST /v1/auth/totp/setup` + `POST /v1/auth/totp/enable` — creator TOTP (secret sealed with `ENCRYPTION_KEY`).
+```bash
+pnpm typecheck
+pnpm test
+pnpm lint
+pnpm build
+pnpm audit:deps
+```
 
-Global `JwtAuthGuard` protects all routes except `@Public()` health and webhook entrypoints. Media uploads require `ownerCreatorId` to match the authenticated user.
+## Production build / deploy
 
-## Enterprise roadmap modules (`apps/api`)
+See [`docs/DEPLOYMENT.md`](docs/DEPLOYMENT.md). Docker builds from repo root:
 
-- `billing` — dual processor webhook ingestion, processor-event idempotency, transaction + ledger writes.
-- `verification` — age and creator identity verification workflows with policy guards.
-- `creator` / `feed` / `messaging` — core subscription content loops and entitlement checks.
-- `admin` / `analytics` / `risk` — moderation operations, payout controls, fraud metrics, payout hold scoring.
-- `compliance` — immutable compliance event emission for legal/audit traces.
+```bash
+docker build -f apps/api/Dockerfile -t hushd/api .
+docker build -f apps/worker/Dockerfile -t hushd/worker .
+docker build -f apps/web/Dockerfile --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com -t hushd/web .
+docker build -f apps/admin/Dockerfile --build-arg NEXT_PUBLIC_API_BASE_URL=https://api.example.com -t hushd/admin .
+```
 
-## Media pipeline
+On Windows, Next `standalone` output is skipped locally (symlink privileges); Docker sets `NEXT_STANDALONE=1`.
 
-1. `POST /v1/media/uploads/init` returns a **staging** upload target.
-2. Client uploads to object storage.
-3. `POST /v1/media/uploads/complete` enqueues `scan_and_ingest` on Redis.
-4. `apps/worker` runs scan verdict handling (clean/quarantine/block), pushes moderation queue items, and performs promotion + Stream UID assignment stubs.
+## Authentication (API)
+
+- Register / login / refresh / logout / me
+- Email verify + password reset (Resend in prod; log provider in dev)
+- Creator TOTP setup/enable
+- Global JWT guard; `@Public` for health/webhooks/auth entrypoints
+
+## Domain modules
+
+Billing (stub processors until live), verification, creator/feed/messaging, media+worker CSAM gate, payouts, admin/risk/compliance, observability.
+
+## Troubleshooting
+
+| Issue | Fix |
+|-------|-----|
+| `migrate deploy` encoding/null errors | Ensure SQL files are UTF-8 (not UTF-16) |
+| Port 5432 busy | Use compose host port **5433** or stop native Postgres |
+| API refuses to start in production | Read `validateEnv` error — stubs/log email/noop IDV blocked |
+| Worker exits on CSAM noop in prod | Set `CSAM_PROVIDER=hashlist` + hashlist file/URL |
+| Next Windows build EPERM | Expected without standalone; use Docker for standalone images |
+
+## Documentation index
+
+| Doc | Purpose |
+|-----|---------|
+| [`docs/PHASE_1_TO_6_AUDIT.md`](docs/PHASE_1_TO_6_AUDIT.md) | Phase verification summary |
+| [`docs/audit/`](docs/audit/) | Inventory, matrix, gaps, remediation log |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | Security model |
+| [`docs/OPERATIONS_RUNBOOK.md`](docs/OPERATIONS_RUNBOOK.md) | Incidents / ops |
+| [`CHANGELOG.md`](CHANGELOG.md) | Material changes |
 
 ## Legal
 
-Product-specific legal programs (for example 2257, reporting, and processor rules) require **qualified counsel**. This repository provides engineering scaffolding only.
+2257, reporting, and processor programs require **qualified counsel**. This repository provides engineering scaffolding and controls — not a legal compliance certificate.

@@ -7,19 +7,26 @@
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
     "lint": "eslint \"src/**/*.ts\"",
-    "test": "echo \"no tests for worker shell\""
+    "test": "jest",
+    "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.spec.json"
   },
   "dependencies": {
     "@prisma/client": "^6.19.0",
+    "@hushd/db": "workspace:*",
     "@hushd/shared": "workspace:*",
+    "@aws-sdk/client-s3": "^3.924.0",
+    "@aws-sdk/s3-request-presigner": "^3.924.0",
     "bullmq": "^5.34.3",
     "ioredis": "^5.4.2"
   },
   "devDependencies": {
+    "@types/jest": "^29.5.14",
     "@types/node": "^22.10.2",
     "@typescript-eslint/eslint-plugin": "^8.18.1",
     "@typescript-eslint/parser": "^8.18.1",
     "eslint": "^8.57.1",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.2.5",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
   }

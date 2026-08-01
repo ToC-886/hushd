@@ -1,4 +1,5 @@
-import { IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { IsEnum, IsInt, IsOptional, IsString, Max, Min } from "class-validator";
+import { SubscriptionInterval } from "@prisma/client";
 
 export class CreateTierDto {
   @IsString()
@@ -12,6 +13,10 @@ export class CreateTierDto {
   @Min(100)
   @Max(1000000)
   priceCents!: number;
+
+  @IsOptional()
+  @IsEnum(SubscriptionInterval)
+  interval?: SubscriptionInterval;
 
   @IsOptional()
   @IsInt()

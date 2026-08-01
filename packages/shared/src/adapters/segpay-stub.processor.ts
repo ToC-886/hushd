@@ -4,12 +4,13 @@ import type {
   NormalizedBillingEvent,
   PaymentProcessor,
   WebhookVerificationContext,
-} from "@hushd/shared";
-import { verifyHmacSha256Hex } from "@hushd/shared";
+} from "./payment-processor";
+import { verifyHmacSha256Hex } from "../webhooks/signature";
 
 /**
  * Non-production stub for adapter wiring and webhook verification patterns.
- * Replace with a real Segpay/CCBill/Epoch integration behind the same interface.
+ * Replace with a real Segpay integration behind the same interface once
+ * merchant credentials (package ID, price points, postback secret) exist.
  */
 export class SegpayStubProcessor implements PaymentProcessor {
   readonly id = "segpay_stub";
@@ -41,10 +42,21 @@ export class SegpayStubProcessor implements PaymentProcessor {
         eventId?: string;
         processorTxnId?: string;
         grossCents?: number;
+        currency?: string;
         type?: NormalizedBillingEvent["type"];
         subscriptionId?: string;
+        fanUserId?: string;
+        creatorId?: string;
+        sessionRef?: string;
+        subscriptionRef?: string;
+        originalProcessorTxnId?: string;
+        occurredAt?: string;
       };
       if (!parsed.processorTxnId) return [];
+      const metadata: Record<string, string> = {};
+      if (parsed.sessionRef) metadata.sessionRef = parsed.sessionRef;
+      if (parsed.subscriptionRef) metadata.subscriptionRef = parsed.subscriptionRef;
+      if (parsed.originalProcessorTxnId) metadata.originalProcessorTxnId = parsed.originalProcessorTxnId;
       return [
         {
           processor: this.id,
@@ -52,10 +64,12 @@ export class SegpayStubProcessor implements PaymentProcessor {
           processorTxnId: parsed.processorTxnId,
           type: parsed.type ?? "subscription_charge",
           grossCents: Number(parsed.grossCents ?? 0),
-          currency: "EUR",
+          currency: parsed.currency ?? "EUR",
+          fanUserId: parsed.fanUserId,
+          creatorId: parsed.creatorId,
           subscriptionId: parsed.subscriptionId,
-          occurredAt: new Date().toISOString(),
-          metadata: {},
+          occurredAt: parsed.occurredAt ?? new Date().toISOString(),
+          metadata,
         },
       ];
     } catch {
@@ -63,11 +77,11 @@ export class SegpayStubProcessor implements PaymentProcessor {
     }
   }
 
-  async cancelSubscription(_processorSubscriptionRef: string): Promise<{ ok: true }> {
+  async cancelSubscription(): Promise<{ ok: true }> {
     return { ok: true };
   }
 
-  async fetchBillingHistory(_sinceIso: string) {
+  async fetchBillingHistory() {
     return [];
   }
 }

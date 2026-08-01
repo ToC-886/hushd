@@ -23,3 +23,16 @@ export interface CsamScanProvider {
 
   scanObject(input: ScanInput): Promise<ScanVerdict>;
 }
+
+/**
+ * Development stub — always returns clean. Production must configure a real
+ * hash-matching integration (e.g. the worker's hashlist provider).
+ * Single authoritative implementation shared by API and worker.
+ */
+export class NoopCsamScanProvider implements CsamScanProvider {
+  readonly id = "noop_csam";
+
+  async scanObject(_input: ScanInput): Promise<ScanVerdict> {
+    return { status: "clean" };
+  }
+}
